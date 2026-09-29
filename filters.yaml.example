@@ -1,0 +1,144 @@
+# Deterministic pre-filter rules, read by app/filters.py. Edit these lists
+# directly as you refine what "in scope" means for you — no code changes
+# needed. See app/filters.py's module docstring for how they're applied.
+
+# Unambiguous engineering-role title signals. If the title matches one of
+# these, it's kept regardless of exclusion_keywords below — e.g. "Software
+# Engineer, Automated Marketing" shouldn't get dropped just because
+# "marketing" is also in exclusion_keywords. Keep this list short and
+# genuinely unambiguous (don't add anything from title_allow_keywords
+# that's also ambiguous, like bare "engineer" or "platform").
+priority_title_keywords:
+  - "software engineer"
+  - "software developer"
+  - "developer"
+  - "full stack"
+  - "fullstack"
+  - "full-stack"
+
+# Title must match at least one of these to be considered at all.
+title_allow_keywords:
+  - "engineer"        # covers Engineer / Engineering Manager / Software Engineering
+  - "engineering"
+  - "developer"
+  - "development"
+  - "programmer"
+  - "architect"
+  - "sre"
+  - "site reliability"
+  - "devops"
+  - "full stack"
+  - "fullstack"
+  - "full-stack"
+  - "backend"
+  - "back-end"
+  - "back end"
+  - "platform"
+  - "tech lead"
+  - "technical lead"
+
+# Even if the title matched the allowlist above, drop it if it also
+# matches one of these — engineering-adjacent titles that aren't a fit.
+exclusion_keywords:
+  - "accountant"
+  - "accounting"
+  - "nurse"
+  - "nursing"
+  - "lawyer"
+  - "attorney"
+  - "paralegal"
+  - "chemist"
+  - "chemistry"
+  - "electrician"
+  - "plumber"
+  - "welder"
+  - "sales representative"
+  - "account executive"
+  - "sales engineer"
+  - "sales development"
+  - "business development representative"
+  - "recruiter"
+  - "talent acquisition"
+  - "talent brand"
+  - "warehouse"
+  - "forklift"
+  - "driver"
+  - "cdl"
+  - "teacher"
+  - "professor"
+  - "dentist"
+  - "physician"
+  - "pharmacist"
+  - "mechanical engineer"
+  - "electrical engineer"
+  - "civil engineer"
+  - "chemical engineer"
+  - "industrial engineer"
+  - "manufacturing engineer"
+  - "hardware engineer"
+  - "process engineer"
+  - "field engineer"
+  - "customer success"
+  - "account manager"
+  - "marketing"
+  - "copywriting"
+  - "compliance"
+  - "product marketing"
+
+# EDIT ME FIRST: locations to keep, as regex patterns (case-insensitive)
+# matched against the free-text location string each ATS/aggregator
+# returns. Ships below as Canada/Alberta-only (the original author's
+# search) — replace with your own country/region/cities, or every job
+# will get rejected regardless of how good a fit it is. Deliberately does
+# NOT allow a bare "Remote" with no country qualifier — some postings say
+# "Remote Poland"/"Remote Spain"/"Remote Australia" etc, so an allowlist
+# needs an explicit country/region signal instead.
+location_allow_patterns:
+  - '\bcanada\b'
+  - '\balberta\b'
+  - ',\s*ab\b'       # "Calgary, AB" / "Edmonton, AB"
+  - '\bedmonton\b'
+  - '\bcalgary\b'
+  - '\bontario\b'
+  - '\bvancouver\b'
+
+# EDIT ME FIRST (along with stack_core below): JD stack dealbreakers — if
+# the description clearly requires one of these languages/frameworks and
+# does NOT also mention anything from stack_core, treat it as a mismatch.
+# Ships assuming a Python/JS candidate who wants to exclude
+# Java/C#/.NET/etc — if your own stack includes one of these "dealbreaker"
+# languages, move it down into stack_core instead, or this will reject
+# roles in your own stack. Only runs when a description is
+# available. Word-boundary matched to avoid e.g. "java" matching
+# "javascript". Deliberately NOT including bare "go" — too ambiguous
+# ("go-to-market", "go live", etc.); "golang" below covers it, and most Go
+# postings also say "Golang" or "Go (Golang)" somewhere in the JD.
+stack_dealbreakers:
+  - '\bjava\b'
+  - '\bc#\b'
+  - '\.net\b'
+  - '\bgolang\b'
+  - '\bruby\b'
+  - '\brails\b'
+  - '\bphp\b'
+  - '\bkotlin\b'
+  - '\bswift\b'
+  - '\bscala\b'
+  - '\bc\+\+\b'
+
+# Your own core stack — if the JD mentions any of these, a stack dealbreaker
+# match above is ignored (the role likely uses both, or the dealbreaker
+# keyword is a false positive).
+stack_core:
+  - '\bpython\b'
+  - '\bfastapi\b'
+  - '\bdjango\b'
+  - '\bflask\b'
+  - '\bjavascript\b'
+  - '\btypescript\b'
+  - '\breact\b'
+  - '\bnode(?:\.?js)?\b'
+
+# Below this many characters, a JD is treated as a short aggregator teaser
+# snippet rather than a full posting (see app/filters.py's looks_truncated).
+truncated_description_min_chars: 400
