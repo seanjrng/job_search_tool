@@ -8,7 +8,7 @@
 #   max_pages (adzuna only) — a pipeline-level control consumed by
 #   fetch_adzuna() before building the request, not sent to Adzuna itself.
 #
-# EDIT ME: every Adzuna entry's `where` below is Alberta/Canada (the
+# EDIT ME: Copy contents to a new file named 'aggregators.yaml' and customize. Every Adzuna entry's `where` below is Alberta/Canada (the
 # original author's search) and `what` targets their keywords/stack.
 # Replace both with your own location and role keywords — and make sure
 # they match filters.yaml's location_allow_patterns/stack_core, or a real

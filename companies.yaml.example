@@ -3,7 +3,7 @@
 # slug: the identifier used in that ATS's public API URL
 #
 # The list below is the original author's real target list (Alberta/Canada
-# tech companies), kept as-is as a working example of the format. Add or
+# tech companies), kept as-is as a working example of the format. Copy contents to a new files named 'companies.yaml' then add or
 # remove entries to match who you're actually applying to — see the
 # README's "Customize for your own search" section.
 

@@ -67,8 +67,8 @@ auth but only covers remote roles.
 ### Customize for your own search
 
 This repo ships pre-configured for the original author's search (Alberta/
-Canada, Python/JS stack). **Before your first run, edit these three
-files** or you'll get zero candidates, or candidates that don't match your
+Canada, Python/JS stack). **Before your first run,  make a new copy of these three
+files and customize search ** or you'll get zero candidates, or candidates that don't match your
 actual stack:
 
 1. **`filters.yaml` → `location_allow_patterns`** — regex patterns for
