@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 .DEFAULT_GOAL := run
 
-.PHONY: run test evaluate web
+.PHONY: run test evaluate web digest
 
 # Interactive wrapper around `python -m app.main` — asks the questions
 # instead of you having to remember the argparse flags.
@@ -36,3 +36,7 @@ evaluate:
 
 web:
 	DB_PATH=$(CURDIR)/data/seen_jobs.sqlite3 npm --prefix web run dev
+
+# Markdown digest of scored review-board jobs, highest score first.
+digest:
+	python -m app.digest

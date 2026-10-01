@@ -265,6 +265,33 @@ def get_user_status(conn, url: str) -> dict | None:
     return dict(zip(["url", "my_status", "notes", "updated_at"], row))
 
 
+def iter_board_jobs(conn):
+    """Scored jobs the review board lists, highest match score first.
+
+    Same join as web/lib/db.ts getJobs() (passed filters, AI evaluation,
+    your own status), limited to rows that have a match score. Company,
+    title, and URL break ties so a digest is stable from run to run.
+    """
+    cur = conn.execute(
+        "SELECT jd.url, jd.company, jd.title, jd.location, jd.description, "
+        "       ae.match_score, ae.recommendation, ae.genuine_gaps, "
+        "       ae.transferable_strengths, ae.risk_factors, "
+        "       us.my_status, us.notes "
+        "FROM job_details jd "
+        "LEFT JOIN ai_evaluations ae ON jd.url = ae.url "
+        "LEFT JOIN user_status us ON jd.url = us.url "
+        "WHERE jd.passed_filters = 1 AND ae.match_score IS NOT NULL "
+        "ORDER BY ae.match_score DESC, jd.company, jd.title, jd.url"
+    )
+    keys = [
+        "url", "company", "title", "location", "description",
+        "match_score", "recommendation", "genuine_gaps",
+        "transferable_strengths", "risk_factors", "my_status", "notes",
+    ]
+    for row in cur.fetchall():
+        yield dict(zip(keys, row))
+
+
 def iter_scored_candidates(conn):
     """All evaluated candidates, best match first, joined with job_details
     for display — used to write the scored CSV."""

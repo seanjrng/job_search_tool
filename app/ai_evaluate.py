@@ -192,7 +192,7 @@ def evaluate_one(client, profile: dict, job: dict, max_retries: int = 1) -> dict
 def write_csv(conn, path: Path = OUTPUT_CSV) -> int:
     path.parent.mkdir(parents=True, exist_ok=True)
     rows = list(dedup.iter_scored_candidates(conn))
-    with open(path, "w", newline="") as f:
+    with open(path, "w", newline="", encoding="utf-8", errors="replace") as f:
         writer = csv.DictWriter(f, fieldnames=[
             "match_score", "recommendation", "company", "title", "location",
             "transferable_strengths", "genuine_gaps", "risk_factors", "url", "posted_at",
@@ -243,8 +243,11 @@ if __name__ == "__main__":
                 continue
             dedup.save_evaluation(conn, job["url"], evaluation, MODEL)
             conn.commit()  # commit per-job so a crash mid-run doesn't lose completed evaluations
-            print(f"[{i}/{len(queue)}] {evaluation['match_score']:3d} {evaluation['recommendation']:9s} | "
-                  f"{job['company']:20s} | {job['title']}")
+            if (evaluation['match_score'] >= 55)
+                print(f"[{i}/{len(queue)}] {evaluation['match_score']:3d} {evaluation['recommendation']:9s} | "
+                    f"{job['company']:20s} | {job['title']}")
+            else
+                print(f"Job Rejected | job: {job['title']} - {job['company']:20s} | score: {evaluation['match_score']:3d}")
 
         total = write_csv(conn)
         print(f"\nWrote {total} scored candidates to {OUTPUT_CSV} (sorted by match_score desc).")

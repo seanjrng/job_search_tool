@@ -5,14 +5,12 @@ An automated pipeline for a targeted job search: fetch open roles directly
 from companies' ATS APIs and job aggregators, filter out anything
 irrelevant, deduplicate against everything already seen, optionally score
 each candidate's fit against your own experience with Claude, and review
-the results in a local web board.
+the results in a local web board or a Markdown digest.
 
 Nothing here talks to any service other than the job sources you configure
 and (for the optional AI step) the Anthropic API. All state — scraped
 jobs, scores, your own notes — lives in a local SQLite database; nothing
 is sent to a third party beyond fetching the postings themselves.
-
-<img width="2532" height="1215" alt="image" src="https://github.com/user-attachments/assets/679cea89-3156-4e46-af3c-74d3e0d9b30c" />
 
 ## How it works
 
@@ -36,6 +34,9 @@ is sent to a third party beyond fetching the postings themselves.
 5. **Review** (`web/`) — a local Next.js app reading/writing the same
    SQLite database directly, for browsing results and tracking your own
    `applied / interview / rejected / skipped / silence` status and notes.
+6. **Digest** (`app/digest.py`) — writes `data/digest.md`, one section per
+   scored job on that board, highest match score first, with the same
+   information as the detail panel.
 
 ## Setup
 
@@ -66,9 +67,7 @@ auth but only covers remote roles.
 
 ### Customize for your own search
 
-This repo ships pre-configured for the original author's search (Alberta/
-Canada, Python/JS stack). **Before your first run, edit these three
-files** or you'll get zero candidates, or candidates that don't match your
+This repo ships pre-configured for the original author. **Before your first run, new file and customize to your profile** or you'll get zero candidates, or candidates that don't match your
 actual stack:
 
 1. **`filters.yaml` → `location_allow_patterns`** — regex patterns for
@@ -129,6 +128,19 @@ Reads/writes `data/seen_jobs.sqlite3` directly — no export/import step.
 See [`web/README.md`](web/README.md) for details (custom `DB_PATH`,
 production build, etc).
 
+### 4. Markdown digest
+
+```bash
+python -m app.digest          # writes data/digest.md
+make digest                   # same thing
+```
+
+One section per scored job that passed filters, highest match score first.
+Jobs with no match score are left out. Each section has the same
+information as the review board's detail panel: title, company, location,
+AI status, score, your own status, notes, the job link, transferable
+strengths, genuine gaps, risk factors, and the job description.
+
 ## Makefile commands
 
 Thin wrappers over the commands above — run from the repo root:
@@ -138,6 +150,7 @@ Thin wrappers over the commands above — run from the repo root:
 | `make run`      | `python -m app.main`             | Fetch + filter (step 1). Interactively asks whether to skip companies/aggregators/discovery and whether to limit to one company slug, instead of you remembering the flags. |
 | `make evaluate` | `python -m app.ai_evaluate`       | AI evaluation (step 2). Interactively asks for `--dry-run` and an optional `--limit`. |
 | `make web`      | `npm --prefix web run dev`       | Starts the Next.js review board, with `DB_PATH` already pointed at `data/seen_jobs.sqlite3`. |
+| `make digest`   | `python -m app.digest`           | Writes `data/digest.md` for scored review-board jobs, highest score first. |
 | `make test`     | `pytest app/` + the standalone sanity-check scripts | Runs the full test suite (see the Tests section below). |
 
 `make` with no target runs `make run` (the default goal).
@@ -167,6 +180,7 @@ app/
   dedup.py                 SQLite store (seen_jobs, job_details)
   discover_companies.py    auto-appends newly-resolved companies to companies.yaml
   ai_evaluate.py           stage 2: Claude-based fit scoring
+  digest.py                Markdown digest of scored review-board jobs, highest score first
   inspect_job.py           CLI to look up a stored job or list recent rejections
   refilter.py              re-runs current filters.py against already-fetched jobs
   scripts/                 one-off diagnostic/maintenance scripts, not part of the pipeline
@@ -207,8 +221,6 @@ None of them call live external APIs.
 - Company-name normalization for aggregator-sourced dedup (the same
   posting sometimes comes back under slightly different company name
   strings, e.g. "Acme Corp" vs. "Acme").
-- A digest output (email/Sheet) beyond the current CSV/SQLite/web-board
-  review flow.
 - Scheduling: once you're happy with a full local run, a daily cron entry
   like `0 7 * * * cd /path/to/job_search_pipeline && python -m app.main && python -m app.ai_evaluate`.
 
