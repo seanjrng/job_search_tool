@@ -256,7 +256,7 @@ def fetch_adzuna(params: dict) -> list[dict]:
 
     jobs = []
     for page in range(1, max_pages + 1):
-        url = f"https://api.adzuna.com/v1/api/jobs/ca/search/{page}"
+        url = f"https://api.adzuna.com/v1/api/jobs/us/search/{page}"
         query = {
             "app_id": app_id,
             "app_key": app_key,

@@ -243,10 +243,10 @@ if __name__ == "__main__":
                 continue
             dedup.save_evaluation(conn, job["url"], evaluation, MODEL)
             conn.commit()  # commit per-job so a crash mid-run doesn't lose completed evaluations
-            if (evaluation['match_score'] >= 55)
+            if (evaluation['match_score'] >= 55):
                 print(f"[{i}/{len(queue)}] {evaluation['match_score']:3d} {evaluation['recommendation']:9s} | "
                     f"{job['company']:20s} | {job['title']}")
-            else
+            else:
                 print(f"Job Rejected | job: {job['title']} - {job['company']:20s} | score: {evaluation['match_score']:3d}")
 
         total = write_csv(conn)
