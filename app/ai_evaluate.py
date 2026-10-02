@@ -33,6 +33,7 @@ from dotenv import load_dotenv
 
 from app import dedup
 from app import filters
+from app import html_to_markdown
 
 load_dotenv()
 
@@ -110,7 +111,7 @@ def load_profile(path: str = "profile.yaml") -> dict:
 # responsibilities listed" and quietly tank match_score.
 def build_user_prompt(profile: dict, job: dict) -> str:
     raw_description = job.get("description", "")
-    description = filters.strip_html(raw_description).strip() or "(no JD text available)"
+    description = html_to_markdown.html_to_markdown(raw_description) or "(no JD text available)"
     partial_note = ""
     if raw_description and filters.looks_truncated(raw_description):
         partial_note = (

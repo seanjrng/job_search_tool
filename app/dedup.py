@@ -265,6 +265,17 @@ def get_user_status(conn, url: str) -> dict | None:
     return dict(zip(["url", "my_status", "notes", "updated_at"], row))
 
 
+def set_my_status(conn, url: str, my_status: str | None) -> None:
+    """Set my_status and keep notes already stored for this URL.
+
+    Passing None clears the status. An empty string is stored as NULL,
+    same as save_user_status.
+    """
+    existing = get_user_status(conn, url)
+    notes = existing["notes"] if existing else None
+    save_user_status(conn, url, my_status, notes)
+
+
 def iter_board_jobs(conn):
     """Scored jobs the review board lists, highest match score first.
 

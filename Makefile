@@ -37,6 +37,7 @@ evaluate:
 web:
 	DB_PATH=$(CURDIR)/data/seen_jobs.sqlite3 npm --prefix web run dev
 
-# Markdown digest of scored review-board jobs, highest score first.
+# Markdown digest of scored jobs not marked applied or skipped, highest
+# score first. Applied/Skipped edits in an existing digest are saved first.
 digest:
 	python -m app.digest
