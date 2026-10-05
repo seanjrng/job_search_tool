@@ -63,7 +63,7 @@ def test_digest_orders_by_score_and_matches_panel_fields(tmp_path: Path):
         for job, passed in ((low, True), (high, True), (unscored, True), (rejected, False)):
             dedup.save_details(conn, job, passed_filters=passed)
         dedup.save_evaluation(conn, low["url"], {
-            "match_score": 40,
+            "match_score": 60,
             "recommendation": "skip",
             "genuine_gaps": "Gap low",
             "transferable_strengths": "Strength low",
@@ -81,7 +81,7 @@ def test_digest_orders_by_score_and_matches_panel_fields(tmp_path: Path):
         tied = _job("https://example.com/tied", "AlphaCo", "Platform Engineer", description="Tied JD")
         dedup.save_details(conn, tied, passed_filters=True)
         dedup.save_evaluation(conn, tied["url"], {
-            "match_score": 40,
+            "match_score": 60,
             "recommendation": "consider",
             "genuine_gaps": "Gap tie",
             "transferable_strengths": "Strength tie",
@@ -92,8 +92,8 @@ def test_digest_orders_by_score_and_matches_panel_fields(tmp_path: Path):
     assert write_digest(db, out) == 3
     text = out.read_text(encoding="utf-8")
 
-    assert text.index("## 90 · HighCo — Staff Engineer") < text.index("## 40 · AlphaCo — Platform Engineer")
-    assert text.index("## 40 · AlphaCo — Platform Engineer") < text.index("## 40 · LowCo — Backend Engineer")
+    assert text.index("## 90 · HighCo — Staff Engineer") < text.index("## 60 · AlphaCo — Platform Engineer")
+    assert text.index("## 60 · AlphaCo — Platform Engineer") < text.index("## 60 · LowCo — Backend Engineer")
     assert "NewCo" not in text
     assert "NoCo" not in text
 
@@ -122,6 +122,28 @@ def test_digest_orders_by_score_and_matches_panel_fields(tmp_path: Path):
     assert "highest score first" in render_digest([])
     assert "0 scored jobs" in render_digest([])
     assert "Set **My status:** to `Applied` or `Skipped`" in render_digest([])
+
+
+def test_scores_below_55_are_left_out(tmp_path: Path):
+    db = str(tmp_path / "jobs.sqlite3")
+    below = _job("https://example.com/below", "BelowCo", "Backend Engineer")
+    edge = _job("https://example.com/edge", "EdgeCo", "Backend Engineer")
+    applied_low = _job("https://example.com/applied-low", "AppliedLowCo", "Backend Engineer")
+    with dedup.connect(db) as conn:
+        for job, score in ((below, 54), (edge, 55), (applied_low, 40)):
+            dedup.save_details(conn, job, passed_filters=True)
+            _eval(conn, job["url"], score)
+        dedup.save_user_status(conn, applied_low["url"], "applied", "sent")
+
+    out = tmp_path / "digest.md"
+    assert write_digest(db, out) == 1
+    text = out.read_text(encoding="utf-8")
+    assert "EdgeCo" in text
+    assert "**Score:** 55" in text
+    assert "BelowCo" not in text
+    assert "AppliedLowCo" not in text
+    # A low score is not an applied/skipped mark, so it does not add to that count.
+    assert "excluded" not in text
 
 
 def _eval(conn, url, score, recommendation="consider"):

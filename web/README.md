@@ -34,8 +34,8 @@ Only jobs that passed the deterministic filter (`passed_filters = 1`). Each row 
 - Your own status (`applied` / `interview` / `rejected` / `skipped` / `silence`) —
   set inline in the table or from the detail panel. Deliberately separate from the AI's
   suggestion, since one is "should I apply" and the other is "what actually happened".
-  Applied and Skipped jobs are left out of `data/digest.md` the next time you run
-  `make digest`.
+  Applied and Skipped jobs, and jobs scored below 55, are left out of
+  `data/digest.md` the next time you run `make digest`.
 - Notes — free text, editable from the detail panel.
 
 Filter by either status, search by company/title, sort any column, click a row to open

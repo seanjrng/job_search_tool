@@ -35,7 +35,7 @@ is sent to a third party beyond fetching the postings themselves.
    SQLite database directly, for browsing results and tracking your own
    `applied / interview / rejected / skipped / silence` status and notes.
 6. **Digest** (`app/digest.py`) — writes `data/digest.md`, one section per
-   scored job on that board that you have not marked applied or skipped,
+   job scored 55 or above that you have not marked applied or skipped,
    highest match score first, with the same information as the detail panel.
 
 ## Setup
@@ -135,9 +135,10 @@ python -m app.digest          # writes data/digest.md
 make digest                   # same thing
 ```
 
-One section per scored job that passed filters, highest match score first.
-Jobs with no match score are left out. So are jobs you have marked
-**Applied** (you applied) or **Skipped** (not a fit). Each remaining
+One section per job that passed filters and scored 55 or above, highest
+match score first. Jobs with no match score, or a score below 55, are
+left out. So are jobs you have marked **Applied** (you applied) or
+**Skipped** (not a fit). Each remaining
 section has the same information as the review board's detail panel:
 title, company, location, AI status, score, your own status, notes, the
 job link, transferable strengths, genuine gaps, risk factors, and the
@@ -168,7 +169,7 @@ Thin wrappers over the commands above — run from the repo root:
 | `make run`      | `python -m app.main`             | Fetch + filter (step 1). Interactively asks whether to skip companies/aggregators/discovery and whether to limit to one company slug, instead of you remembering the flags. |
 | `make evaluate` | `python -m app.ai_evaluate`       | AI evaluation (step 2). Interactively asks for `--dry-run` and an optional `--limit`. |
 | `make web`      | `npm --prefix web run dev`       | Starts the Next.js review board, with `DB_PATH` already pointed at `data/seen_jobs.sqlite3`. |
-| `make digest`   | `python -m app.digest`           | Writes `data/digest.md` for scored jobs you have not marked applied or skipped, highest score first. Reads Applied/Skipped edits from an existing digest first. |
+| `make digest`   | `python -m app.digest`           | Writes `data/digest.md` for jobs scored 55 or above that you have not marked applied or skipped, highest score first. Reads Applied/Skipped edits from an existing digest first. |
 | `make test`     | `pytest app/` + the standalone sanity-check scripts | Runs the full test suite (see the Tests section below). |
 
 `make` with no target runs `make run` (the default goal).
@@ -198,7 +199,7 @@ app/
   dedup.py                 SQLite store (seen_jobs, job_details)
   discover_companies.py    auto-appends newly-resolved companies to companies.yaml
   ai_evaluate.py           stage 2: Claude-based fit scoring
-  digest.py                Markdown digest of open scored jobs, highest score first
+  digest.py                Markdown digest of open jobs scored 55 or above, highest score first
   inspect_job.py           CLI to look up a stored job or list recent rejections
   refilter.py              re-runs current filters.py against already-fetched jobs
   scripts/                 one-off diagnostic/maintenance scripts, not part of the pipeline

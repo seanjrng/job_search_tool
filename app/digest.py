@@ -1,9 +1,10 @@
 """Write a Markdown digest of the jobs shown on the review board.
 
-One section per scored job that passed filters, highest match score first.
-Jobs with no match score are left out. Jobs you have marked Applied or
-Skipped are left out too: Applied means you applied, Skipped means it is
-not a fit. Each remaining section carries the information the detail panel
+One section per job that passed filters and scored 55 or above, highest
+match score first. Jobs with no match score, or a match score below 55,
+are left out. Jobs you have marked Applied or Skipped are left out too:
+Applied means you applied, Skipped means it is not a fit. Each remaining
+section carries the information the detail panel
 shows: title, company, location, AI status, score, your status, notes,
 link, transferable strengths, genuine gaps, risk factors, and the job
 description.
@@ -49,6 +50,8 @@ MY_STATUS_LABEL = {
 # job from the digest. Interview, rejected, and silence stay, so a role
 # still in motion remains in the file. The review board still lists all of them.
 EXCLUDED_STATUSES = frozenset({"applied", "skipped"})
+# Same bar ai_evaluate uses when it prints a job as rejected.
+MIN_MATCH_SCORE = 55
 _STATUS_PLACEHOLDERS = frozenset({"", "—", "-", "— not set —", "- not set -", "not set"})
 _SKIPPED_MARKS = frozenset({"skipped", "skip", "pass", "not a fit", "not a good fit"})
 # Display labels we write for statuses that should stay in the digest.
@@ -263,8 +266,9 @@ def _open_and_excluded(jobs: list[dict]) -> tuple[list[dict], int]:
     open_jobs = []
     excluded = 0
     for job in jobs:
+        score = job.get("match_score")
         status = (job.get("my_status") or "").strip().casefold()
-        if status in EXCLUDED_STATUSES:
+        if status in EXCLUDED_STATUSES or (score is not None and score < MIN_MATCH_SCORE):
             excluded += 1
         else:
             open_jobs.append(job)
@@ -419,7 +423,7 @@ def refresh_digest(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Write a Markdown digest of review-board jobs. "
+        description="Write a Markdown digest of review-board jobs scored 55 or above. "
         "Applied and skipped jobs are left out."
     )
     parser.add_argument("--output", type=Path, default=OUTPUT_PATH, help="Markdown file to write")
