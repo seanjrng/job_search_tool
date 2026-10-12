@@ -111,6 +111,43 @@ def test_adzuna_only_fetches_full_jd_for_promising_thin_snippets():
     print("fetch_adzuna: full-JD fetch gated to promising+thin results only — OK")
 
 
+def test_adzuna_forwards_expanded_search_params():
+    """aggregators.yaml's extra Adzuna keys must reach the query string.
+    max_pages is a local pagination cap and must not be sent."""
+    page_resp = _fake_response("...", json_data={"results": []})
+    params = {
+        "what": "software engineer",
+        "what_or": 'backend engineer "api developer"',
+        "what_exclude": "mulesoft anypoint",
+        "where": "37912",
+        "distance": 80,
+        "category": "it-jobs",
+        "full_time": 1,
+        "sort_by": "date",
+        "results_per_page": 50,
+        "max_pages": 3,
+    }
+
+    import os
+    with patch.dict(os.environ, {"ADZUNA_APP_ID": "id", "ADZUNA_APP_KEY": "key"}), \
+         patch("httpx.get", return_value=page_resp) as mock_get:
+        jobs = aggregator_clients.fetch_adzuna(dict(params))
+
+    assert jobs == []
+    assert mock_get.call_count == 1
+    url = mock_get.call_args.args[0]
+    sent = mock_get.call_args.kwargs["params"]
+    assert url.endswith("/jobs/us/search/1")
+    for key in (
+        "what", "what_or", "what_exclude", "where", "distance",
+        "category", "full_time", "sort_by", "results_per_page",
+    ):
+        assert sent[key] == params[key]
+    assert "max_pages" not in sent
+    assert sent["app_id"] == "id" and sent["app_key"] == "key"
+    print("fetch_adzuna: expanded search params forwarded, max_pages stripped — OK")
+
+
 def test_adzuna_queues_discovered_companies():
     """When fetch_full_description resolves a Greenhouse/Lever match, that
     company should land in DISCOVERED_COMPANIES for discover_companies.py
@@ -146,5 +183,6 @@ if __name__ == "__main__":
     test_full_description_falls_back_to_html_scrape()
     test_full_description_returns_none_on_failure()
     test_adzuna_only_fetches_full_jd_for_promising_thin_snippets()
+    test_adzuna_forwards_expanded_search_params()
     test_adzuna_queues_discovered_companies()
     print("\nAll assertions passed.")

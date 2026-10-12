@@ -26,7 +26,7 @@ COMPANIES_YAML = "companies.yaml"
 
 def load_known_keys(path: str = COMPANIES_YAML) -> set[tuple[str, str]]:
     """(ats, slug) pairs already tracked, so we never suggest a duplicate."""
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
     return {(c["ats"], c["slug"]) for c in data.get("companies", [])}
 
@@ -65,7 +65,7 @@ def append_new_companies(discovered: list[dict], path: str = COMPANIES_YAML, sou
         lines.append(f"    slug: {c['slug']}")
     block = "\n".join(lines) + "\n"
 
-    with open(path, "a") as f:
+    with open(path, "a", encoding="utf-8") as f:
         f.write(block)
 
     return to_add

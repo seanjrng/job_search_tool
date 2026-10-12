@@ -241,7 +241,11 @@ def fetch_adzuna(params: dict) -> list[dict]:
     results, and the free tier's ranking means good matches can be a few
     pages deep. Fetches up to `max_pages` (default 5, set per-aggregator in
     aggregators.yaml), stopping early if a page comes back short (signals
-    we've hit the end of Adzuna's result set for that query)."""
+    we've hit the end of Adzuna's result set for that query).
+
+    `max_pages` is stripped before the request. Every other key is sent as
+    an Adzuna query parameter, including what, what_or, what_exclude, where,
+    distance, category, full_time, sort_by, and results_per_page."""
     app_id = os.environ.get("ADZUNA_APP_ID")
     app_key = os.environ.get("ADZUNA_APP_KEY")
     if not app_id or not app_key:

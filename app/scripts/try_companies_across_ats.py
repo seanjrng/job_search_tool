@@ -68,7 +68,7 @@ def candidate_slugs(name: str) -> list[str]:
 
 
 def load_known_names(path: str = "companies.yaml") -> set[str]:
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
     return {c["name"].strip().lower() for c in data.get("companies", [])}
 

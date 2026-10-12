@@ -37,7 +37,7 @@ OUTPUT_CSV = Path("data/candidates.csv")
 
 
 def load_yaml_list(path: str, key: str) -> list[dict]:
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         return yaml.safe_load(f)[key]
 
 
@@ -101,7 +101,7 @@ def write_csv(candidates: list[dict], path: Path = OUTPUT_CSV) -> None:
     multi-KB JD into a CSV cell makes the file unreadable in Excel/Sheets."""
     path.parent.mkdir(parents=True, exist_ok=True)
     file_exists = path.exists()
-    with open(path, "a", newline="") as f:
+    with open(path, "a", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=CSV_COLUMNS, extrasaction="ignore")
         if not file_exists:
             writer.writeheader()

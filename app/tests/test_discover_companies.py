@@ -18,7 +18,7 @@ def main():
     os.makedirs("data", exist_ok=True)
     shutil.copy("companies.yaml", TEST_YAML)
 
-    with open(TEST_YAML) as f:
+    with open(TEST_YAML, encoding="utf-8") as f:
         original_text = f.read()
     original_companies = yaml.safe_load(original_text)["companies"]
 
@@ -44,7 +44,7 @@ def main():
 
     # --- existing file content (comments included) must be untouched, only
     # appended to ---
-    with open(TEST_YAML) as f:
+    with open(TEST_YAML, encoding="utf-8") as f:
         new_text = f.read()
     assert new_text.startswith(original_text), "existing file content was modified, not just appended to"
     assert "# Company registry for the job discovery pipeline." in new_text  # header comment survived
@@ -53,7 +53,7 @@ def main():
 
     # --- the whole file (original + appended block) must still be valid,
     # loadable YAML with the right final company count ---
-    with open(TEST_YAML) as f:
+    with open(TEST_YAML, encoding="utf-8") as f:
         reloaded = yaml.safe_load(f)
     assert len(reloaded["companies"]) == len(original_companies) + 2
     names = {c["name"] for c in reloaded["companies"]}
