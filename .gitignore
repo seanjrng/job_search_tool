@@ -14,3 +14,7 @@ profile.yaml
 aggregators.yaml
 companies.yaml
 filters.yaml
+*_slug_cache*/*
+*_slug_cache/
+*_slug_cache*
+part-*
