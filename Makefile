@@ -1,7 +1,13 @@
 SHELL := /bin/bash
 .DEFAULT_GOAL := run
 
-.PHONY: run test evaluate web digest
+.PHONY: run test evaluate web digest setup
+
+# Copy missing example configs, install Python dependencies, and create
+# data/ats_discovery.sqlite3 when it is not already there.
+setup:
+	python setup.py
+
 
 # Interactive wrapper around `python -m app.main` — asks the questions
 # instead of you having to remember the argparse flags.

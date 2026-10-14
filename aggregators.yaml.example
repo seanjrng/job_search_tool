@@ -1,4 +1,4 @@
-# Broad-coverage job aggregators (as opposed to companies.yaml, which is
+# Broad-coverage job aggregators (as opposed to ats_slug, which is)
 # one board per company). These search across many employers at once using
 # keyword + location, so they catch companies you haven't identified yet —
 # at the cost of more noise, which is exactly what filters.py exists for.

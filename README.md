@@ -15,9 +15,9 @@ is sent to a third party beyond fetching the postings themselves.
 ## How it works
 
 1. **Fetch** (`app/main.py`) — pulls open roles from:
-   - `companies.yaml` — known companies queried directly via their ATS
-     (Greenhouse, Ashby, Workable, Lever, SmartRecruiters) — precise, low
-     noise.
+   - `data/ats_discovery.sqlite3` table `ats_slug` — one board per row with
+     `available = 1` (Greenhouse, Ashby, Workable, Lever, SmartRecruiters)
+     — precise, low noise.
    - `aggregators.yaml` — broad keyword+location search across many
      employers at once (Adzuna, Remotive) — wider reach, more noise.
 2. **Filter** (`app/filters.py`) — drops anything that isn't an
@@ -41,23 +41,24 @@ is sent to a third party beyond fetching the postings themselves.
 ## Setup
 
 ```bash
-pip install -r requirements.txt
-cp .env.example .env
-# fill in .env with the keys you need — see the comments in that file
+python setup.py
 ```
 
-Create your experience profile from the template (this file is gitignored
-— it's never committed, since it holds your personal experience):
+That installs `requirements.txt`, copies these templates when the real
+file is missing (it never overwrites a file you already have), and creates
+`data/ats_discovery.sqlite3` with the `ats_slug` table:
 
-```bash
-cp profile.example.yaml profile.yaml
-# then edit profile.yaml with your own background
-```
+- `.env.example` → `.env`
+- `profile.example.yaml` → `profile.yaml`
+- `filters.yaml.example` → `filters.yaml`
+- `aggregators.yaml.example` → `aggregators.yaml`
 
-`profile.example.yaml` is a blank template — it tells you the shape but
-not the bar. For a fully worked (fictional) example showing the level of
-specificity/quantification each evidence bullet should actually have, see
-[`profile.sample.yaml`](profile.sample.yaml).
+Fill in `.env` and `profile.yaml`. `profile.yaml` is gitignored — it holds
+your personal experience. `profile.example.yaml` is a blank template.
+For a fully worked (fictional) example, see
+[`profile.sample.yaml`](profile.sample.yaml). It shows the level of
+specificity each evidence bullet should have. `profile.example.yaml` is
+only the shape.
 
 `ANTHROPIC_API_KEY` is only needed for the AI evaluation step. Adzuna
 (`ADZUNA_APP_ID`/`ADZUNA_APP_KEY`) is only needed if you keep an Adzuna
@@ -81,9 +82,10 @@ actual stack:
    Java/C#/.NET/etc. If your own stack includes one of the "dealbreaker"
    languages, move it into `stack_core` (or the filter will reject roles
    in your own stack).
-3. **`companies.yaml`** — the company registry. Ships with the original
-   author's real target list; add/remove companies to match who you're
-   actually applying to (see the file's header comment for the format).
+3. **`ats_slug`** — the company registry, in `data/ats_discovery.sqlite3`.
+   Each row is one board (`slug`, `ats_board`, `name`). `available = 1`
+   means the next run will check it. `companies.yaml.example` shows the
+   old entry shape; the pipeline does not read that file.
    `aggregators.yaml`'s `where` params are also location-specific —
    update those too if you're not targeting Alberta/Canada.
 
@@ -94,7 +96,7 @@ actual stack:
 ```bash
 python -m app.main                    # all companies + aggregators
 python -m app.main --company affirm   # just one company, for debugging a fetcher
-python -m app.main --skip-aggregators # companies.yaml only
+python -m app.main --skip-aggregators # ats_slug boards only
 python -m app.main --skip-companies   # aggregators.yaml only
 
 make run                              # same thing, interactive prompts instead of flags
@@ -166,6 +168,7 @@ Thin wrappers over the commands above — run from the repo root:
 
 | Command        | Equivalent to                    | What it does |
 |-----------------|----------------------------------|--------------|
+| `make setup`    | `python setup.py`                | Install Python dependencies, copy missing example configs, and create `data/ats_discovery.sqlite3` if needed. |
 | `make run`      | `python -m app.main`             | Fetch + filter (step 1). Interactively asks whether to skip companies/aggregators/discovery and whether to limit to one company slug, instead of you remembering the flags. |
 | `make evaluate` | `python -m app.ai_evaluate`       | AI evaluation (step 2). Interactively asks for `--dry-run` and an optional `--limit`. |
 | `make web`      | `npm --prefix web run dev`       | Starts the Next.js review board, with `DB_PATH` already pointed at `data/seen_jobs.sqlite3`. |
@@ -176,8 +179,9 @@ Thin wrappers over the commands above — run from the repo root:
 
 ## Configuration
 
-- **`companies.yaml`** — the company registry (name, ATS type, slug). Add
-  a company here once you've identified its ATS.
+- **`data/ats_discovery.sqlite3`** — the company registry (`ats_slug`:
+  name, ATS board, slug, `available`, `last_seen`, `discovery_time`).
+  Rows with `available = 1` are the boards `main.py` checks.
 - **`aggregators.yaml`** — aggregator search config (keywords, location,
   pagination limits).
 - **`filters.yaml`** — title allowlist/exclusion keywords, location
@@ -197,7 +201,7 @@ app/
   aggregator_clients.py    one fetch function per aggregator
   filters.py               loads and applies filters.yaml's rules
   dedup.py                 SQLite store (seen_jobs, job_details)
-  discover_companies.py    auto-appends newly-resolved companies to companies.yaml
+  discover_companies.py    records newly-resolved companies in ats_slug
   ai_evaluate.py           stage 2: Claude-based fit scoring
   digest.py                Markdown digest of open jobs scored 55 or above, highest score first
   inspect_job.py           CLI to look up a stored job or list recent rejections
@@ -205,7 +209,8 @@ app/
   scripts/                 one-off diagnostic/maintenance scripts, not part of the pipeline
   tests/                   pytest + standalone sanity-check scripts
 web/                       Next.js review board (see web/README.md)
-companies.yaml             company -> ATS registry
+companies.yaml.example     example company entries (not read by the pipeline)
+data/ats_discovery.sqlite3 company -> ATS registry (table ats_slug)
 aggregators.yaml           aggregator search config
 filters.yaml               title/location/stack filter rules
 profile.example.yaml       blank template for profile.yaml (your real profile, gitignored)
