@@ -1,72 +1,87 @@
-"""Sanity test for discover_companies.py — runs against a throwaway COPY of
-companies.yaml, never the real file. Verifies: known companies are never
-re-suggested, duplicates within one run are collapsed, appending preserves
-the existing file's comments/formatting, and the appended block is valid
-YAML that round-trips correctly. Run with: python -m app.tests.test_discover_companies
+"""Sanity test for discover_companies.py — runs against a throwaway database,
+never the real ats_discovery.sqlite3. Verifies known companies are never
+re-inserted, duplicates within one run are collapsed, and a second run with
+the same discoveries adds nothing.
+
+Run with: python -m app.tests.test_discover_companies
 """
 import os
-import shutil
-
-import yaml
+import sqlite3
 
 from app import discover_companies
 
-TEST_YAML = "data/test_companies.yaml"
+TEST_DB = "data/test_ats_discovery.sqlite3"
 
 
 def main():
     os.makedirs("data", exist_ok=True)
-    shutil.copy("companies.yaml", TEST_YAML)
+    if os.path.exists(TEST_DB):
+        os.remove(TEST_DB)
 
-    with open(TEST_YAML, encoding="utf-8") as f:
-        original_text = f.read()
-    original_companies = yaml.safe_load(original_text)["companies"]
+    conn = sqlite3.connect(TEST_DB)
+    conn.execute(
+        """
+        CREATE TABLE ats_slug(
+            slug TEXT,
+            ats_board TEXT,
+            available INTEGER DEFAULT 1,
+            last_seen INTEGER,
+            discovery_time INTEGER,
+            name TEXT,
+            PRIMARY KEY(slug, ats_board)
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO ats_slug (slug, ats_board, name) VALUES ('affirm', 'greenhouse', 'Affirm')"
+    )
+    conn.execute(
+        "INSERT INTO ats_slug (slug, ats_board, name) VALUES ('treewalk', 'workable', 'Treewalk')"
+    )
+    conn.commit()
+    conn.close()
 
-    # --- already-tracked companies (Affirm/greenhouse) should never be
-    # re-suggested, even with a different display-name casing from Adzuna ---
-    known = discover_companies.load_known_keys(TEST_YAML)
+    known = discover_companies.load_known_keys(TEST_DB)
     assert ("greenhouse", "affirm") in known
     assert ("workable", "treewalk") in known
     print(f"load_known_keys OK: {len(known)} pairs loaded")
 
     discovered = [
-        {"name": "Affirm Inc.", "ats": "greenhouse", "slug": "affirm"},  # already known -> skip
-        {"name": "Warner Music Group", "ats": "greenhouse", "slug": "warnermusicgroup"},  # new
-        {"name": "Warner Music Group", "ats": "greenhouse", "slug": "warnermusicgroup"},  # dup within this run -> collapse
-        {"name": "Some New Co", "ats": "lever", "slug": "somenewco"},  # new, different ATS
+        {"name": "Affirm Inc.", "ats": "greenhouse", "slug": "affirm"},
+        {"name": "Warner Music Group", "ats": "greenhouse", "slug": "warnermusicgroup"},
+        {"name": "Warner Music Group", "ats": "greenhouse", "slug": "warnermusicgroup"},
+        {"name": "Some New Co", "ats": "lever", "slug": "somenewco"},
     ]
-    added = discover_companies.append_new_companies(discovered, path=TEST_YAML)
+    added = discover_companies.append_new_companies(discovered, path=TEST_DB)
 
-    assert len(added) == 2, f"expected 2 new companies appended, got {len(added)}: {added}"
+    assert len(added) == 2, f"expected 2 new companies inserted, got {len(added)}: {added}"
     assert {"name": "Warner Music Group", "ats": "greenhouse", "slug": "warnermusicgroup"} in added
     assert {"name": "Some New Co", "ats": "lever", "slug": "somenewco"} in added
     print("append_new_companies OK: correctly deduped known + within-call dupes, added 2")
 
-    # --- existing file content (comments included) must be untouched, only
-    # appended to ---
-    with open(TEST_YAML, encoding="utf-8") as f:
-        new_text = f.read()
-    assert new_text.startswith(original_text), "existing file content was modified, not just appended to"
-    assert "# Company registry for the job discovery pipeline." in new_text  # header comment survived
-    assert "coveodeven" in new_text or "corrected 2026-08-10" in new_text  # provenance comment survived
-    print("File comments/formatting preserved OK")
+    conn = sqlite3.connect(TEST_DB)
+    rows = conn.execute(
+        """
+        SELECT name, ats_board, slug, available, last_seen, discovery_time
+        FROM ats_slug
+        WHERE slug IN ('warnermusicgroup', 'somenewco', 'affirm')
+        ORDER BY slug
+        """
+    ).fetchall()
+    conn.close()
+    by_slug = {slug: (name, ats, available, last_seen, discovery_time) for name, ats, slug, available, last_seen, discovery_time in rows}
+    assert by_slug["affirm"][0] == "Affirm"
+    assert by_slug["warnermusicgroup"][0] == "Warner Music Group"
+    assert by_slug["warnermusicgroup"][2] == 1
+    assert by_slug["warnermusicgroup"][3] == by_slug["warnermusicgroup"][4]
+    assert by_slug["somenewco"][1] == "lever"
+    print("Inserted rows OK: available = 1, timestamps set, existing Affirm name kept")
 
-    # --- the whole file (original + appended block) must still be valid,
-    # loadable YAML with the right final company count ---
-    with open(TEST_YAML, encoding="utf-8") as f:
-        reloaded = yaml.safe_load(f)
-    assert len(reloaded["companies"]) == len(original_companies) + 2
-    names = {c["name"] for c in reloaded["companies"]}
-    assert "Warner Music Group" in names and "Some New Co" in names
-    print(f"Round-trip YAML valid OK: {len(reloaded['companies'])} companies total")
-
-    # --- running again with the same discovered list should add nothing
-    # (now-known from the previous append) ---
-    added_again = discover_companies.append_new_companies(discovered, path=TEST_YAML)
+    added_again = discover_companies.append_new_companies(discovered, path=TEST_DB)
     assert added_again == [], f"expected no new companies on second run, got {added_again}"
     print("Idempotency OK: re-running with the same discoveries adds nothing")
 
-    os.remove(TEST_YAML)
+    os.remove(TEST_DB)
     print("\nAll assertions passed.")
 
 

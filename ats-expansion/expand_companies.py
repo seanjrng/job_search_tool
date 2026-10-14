@@ -1,13 +1,20 @@
-"""Validate Greenhouse board tokens and append the live ones to companies.yaml.
+"""Validate discovered ATS slugs and append the live ones to companies.yaml.
 
-Reads tokens.txt (one board token per line). A GET of
-https://boards-api.greenhouse.io/v1/boards/{token} that returns 200 is appended
-to companies.yaml. A token or board name with a non-ASCII character is rejected.
-Every other result is written to failed_tokens.txt as ``token<TAB>reason`` for
-a later pass. Tokens already present as slugs are skipped.
+Reads ats_slug rows with available = 1 from data/ats_discovery.sqlite3. Each slug is
+checked only against its own board:
+
+    https://boards-api.greenhouse.io/v1/boards/{slug}
+    https://api.ashbyhq.com/posting-api/job-board/{slug}
+
+A 200 is appended to companies.yaml. last_seen becomes the current epoch
+second and available stays 1. A failed check sets available to 0 and leaves
+last_seen unchanged. Transient request failures wait 10 seconds before each
+retry. (ats, slug) pairs already present in companies.yaml are skipped.
+Failures are also written to failed_tokens.txt as ``slug<TAB>ats=reason``.
 """
 
 import json
+import sqlite3
 import sys
 import threading
 import time
@@ -19,13 +26,17 @@ import requests
 import yaml
 
 ROOT = Path(__file__).resolve().parent
-TOKENS_PATH = ROOT / "tokens.txt"
+DB_PATH = ROOT.parent / "data" / "ats_discovery.sqlite3"
 COMPANIES_PATH = ROOT / "companies.yaml"
 FAILURES_PATH = ROOT / "failed_tokens.txt"
-BOARD_URL = "https://boards-api.greenhouse.io/v1/boards/{token}"
+ATS_URLS = {
+    "greenhouse": "https://boards-api.greenhouse.io/v1/boards/{token}",
+    "ashby": "https://api.ashbyhq.com/posting-api/job-board/{token}",
+}
 WORKERS = 8
 TIMEOUT = 20
 RETRIES = 4
+RETRY_WAIT = 10
 
 _thread = threading.local()
 
@@ -42,14 +53,45 @@ def yaml_scalar(value: str) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
-def load_slugs(text: str) -> set[str]:
+def load_existing(text: str) -> set[tuple[str, str]]:
+    """Return {(ats, lowercased slug)} for entries already in companies.yaml."""
     data = yaml.safe_load(text) or {}
-    slugs = set()
+    existing = set()
     for company in data.get("companies") or []:
         slug = company.get("slug")
         if slug is not None:
-            slugs.add(str(slug))
-    return slugs
+            ats = str(company.get("ats") or "").lower()
+            existing.add((ats, str(slug).lower()))
+    return existing
+
+
+def load_slugs(db: sqlite3.Connection) -> list[tuple[str, str]]:
+    """Return (ats, slug) rows that are still available to check."""
+    return db.execute(
+        """
+        SELECT ats_board, slug
+        FROM ats_slug
+        WHERE available = 1
+          AND ats_board IN ('greenhouse', 'ashby')
+        ORDER BY ats_board, slug
+        """
+    ).fetchall()
+
+
+def mark_seen(db: sqlite3.Connection, ats: str, slug: str, seen_at: int) -> None:
+    """Record a live board. available stays at 1."""
+    db.execute(
+        "UPDATE ats_slug SET last_seen = ? WHERE slug = ? AND ats_board = ?",
+        (seen_at, slug, ats),
+    )
+
+
+def mark_unavailable(db: sqlite3.Connection, ats: str, slug: str) -> None:
+    """Record a failed check. last_seen is left as it is."""
+    db.execute(
+        "UPDATE ats_slug SET available = 0 WHERE slug = ? AND ats_board = ?",
+        (slug, ats),
+    )
 
 
 def session() -> requests.Session:
@@ -70,67 +112,76 @@ def has_foreign(value: str) -> bool:
     return not value.isascii()
 
 
-def check(token: str) -> tuple[str | None, str | None]:
+def check(ats: str, token: str) -> tuple[str | None, str | None]:
     """Return (company name, None) on 200, or (None, reason) otherwise."""
     if has_foreign(token):
         return None, "non-ascii"
-    url = BOARD_URL.format(token=quote(token, safe=""))
+    url = ATS_URLS[ats].format(token=quote(token, safe=""))
     last_reason = "request failed"
     for attempt in range(RETRIES):
         try:
             response = session().get(url, timeout=TIMEOUT)
         except requests.RequestException as exc:
             last_reason = type(exc).__name__
-            time.sleep(2**attempt)
+            if attempt + 1 < RETRIES:
+                time.sleep(RETRY_WAIT)
             continue
         if response.status_code == 200:
-            name = token
             try:
                 payload = response.json()
-            except json.JSONDecodeError:
+            except ValueError:
                 payload = None
-            if isinstance(payload, dict):
-                found = payload.get("name")
-                if isinstance(found, str) and found.strip():
-                    name = found.strip()
+            name = token
+            if ats == "greenhouse":
+                if isinstance(payload, dict):
+                    found = payload.get("name")
+                    if isinstance(found, str) and found.strip():
+                        name = found.strip()
+            elif ats == "ashby":
+                # The posting API has no company name; guard against a
+                # "soft 200" that isn't a job board payload.
+                if not (isinstance(payload, dict) and isinstance(payload.get("jobs"), list)):
+                    return None, "unexpected-body"
             if has_foreign(name):
                 return None, "non-ascii"
             return name, None
         if response.status_code in (429, 500, 502, 503, 504):
             last_reason = str(response.status_code)
-            retry_after = response.headers.get("Retry-After")
-            delay = 2**attempt
-            if retry_after and retry_after.isdigit():
-                delay = min(int(retry_after), 30)
-            time.sleep(delay)
+            if attempt + 1 < RETRIES:
+                time.sleep(RETRY_WAIT)
             continue
         return None, str(response.status_code)
     return None, last_reason
 
 
-def entry(name: str, slug: str) -> str:
+def entry(name: str, ats: str, slug: str) -> str:
     return (
         f"  - name: {yaml_scalar(name)}\n"
-        f"    ats: greenhouse\n"
+        f"    ats: {ats}\n"
         f"    slug: {yaml_scalar(slug)}\n"
     )
 
 
 def main() -> None:
-    tokens = []
-    seen = set()
-    for line in TOKENS_PATH.read_text(encoding="utf-8").splitlines():
-        token = line.strip().split()[0] if line.strip() else ""
-        if not token or token.startswith("#") or token in seen:
-            continue
-        seen.add(token)
-        tokens.append(token)
+    db = sqlite3.connect(DB_PATH)
+    try:
+        _expand(db)
+    finally:
+        db.close()
+
+
+def _expand(db: sqlite3.Connection) -> None:
+    pairs = load_slugs(db)
 
     companies_text = COMPANIES_PATH.read_text(encoding="utf-8")
-    existing = load_slugs(companies_text)
-    pending = [token for token in tokens if token not in existing]
+    existing = load_existing(companies_text)
+
+    pending = [
+        (ats, token) for ats, token in pairs if (ats, token.lower()) not in existing
+    ]
     print(
-        f"tokens={len(tokens)} already_present={len(tokens) - len(pending)} to_check={len(pending)}",
+        f"pairs={len(pairs)} already_present={len(pairs) - len(pending)} "
+        f"tokens_to_check={len(pending)}",
         flush=True,
     )
 
@@ -139,7 +190,7 @@ def main() -> None:
             handle.write("\n")
     FAILURES_PATH.write_text("", encoding="utf-8")
 
-    results: dict[int, tuple[str, str | None, str | None]] = {}
+    results: dict[int, tuple] = {}
     next_index = 0
     added = 0
     failed = 0
@@ -150,12 +201,15 @@ def main() -> None:
         company_lines = []
         failure_lines = []
         while next_index in results:
-            token, name, reason = results.pop(next_index)
+            ats, token = pending[next_index]
+            name, reason = results.pop(next_index)
             if reason is None:
-                company_lines.append(entry(name or token, token))
+                company_lines.append(entry(name or token, ats, token))
+                mark_seen(db, ats, token, int(time.time()))
                 added += 1
             else:
-                failure_lines.append(f"{token}\t{reason}\n")
+                failure_lines.append(f"{token}\t{ats}={reason}\n")
+                mark_unavailable(db, ats, token)
                 failed += 1
             next_index += 1
         if company_lines:
@@ -164,18 +218,18 @@ def main() -> None:
         if failure_lines:
             with FAILURES_PATH.open("a", encoding="utf-8") as handle:
                 handle.write("".join(failure_lines))
+        db.commit()
 
     with ThreadPoolExecutor(max_workers=WORKERS) as pool:
         futures = {
-            pool.submit(check, token): (index, token)
-            for index, token in enumerate(pending)
+            pool.submit(check, ats, token): index
+            for index, (ats, token) in enumerate(pending)
         }
         done = 0
         for future in as_completed(futures):
-            index, token = futures[future]
-            name, reason = future.result()
+            index = futures[future]
             with lock:
-                results[index] = (token, name, reason)
+                results[index] = future.result()
                 flush_ready()
                 done += 1
                 if done % 100 == 0 or done == len(pending):

@@ -21,7 +21,7 @@ FULL_JD_TIMEOUT = 10.0  # shorter: this is a best-effort extra request per job, 
 
 # Companies discovered mid-run: fetch_full_description resolved an Adzuna
 # redirect to a Greenhouse/Lever slug we don't already track in
-# companies.yaml. Module-level rather than threaded through every return
+# ats_slug. Module-level rather than threaded through every return
 # value because fetch_adzuna's return shape (list[dict] of jobs) is a
 # shared contract with fetch_remotive/FETCHERS/fetch_aggregator — see
 # discover_companies.py for what reads this after a run. Each process run
@@ -165,10 +165,10 @@ def fetch_full_description(redirect_url: str) -> dict:
     fall back to the short snippet rather than let one bad job kill the
     run. `ats`/`slug` are set ONLY when the redirect resolved to a
     recognized ATS's own single-job API call that actually succeeded —
-    that's the signal discover_companies.py uses to suggest adding the
-    company to companies.yaml, since the slug is verified by a real
-    successful request, not guessed from a URL (see companies.yaml's
-    Coveo/Treewalk history for why that distinction matters — a slug
+    that's the signal discover_companies.py uses to record the company
+    in ats_slug, since the slug is verified by a real
+    successful request, not guessed from a URL (the old Coveo/Treewalk
+    misses are why that distinction matters — a slug
     parsed off a search-result URL burned real API calls on 404s twice
     before being caught).
 

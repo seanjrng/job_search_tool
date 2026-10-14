@@ -168,7 +168,7 @@ def get_details_by_url(conn, url: str) -> dict | None:
 def distinct_companies(conn) -> list[str]:
     """Every distinct company name we've ever seen in job_details — the
     input for try_companies_across_ats.py, which checks which of these
-    aren't in companies.yaml yet and tries to guess their ATS slug
+    aren't in ats_slug yet and tries to guess their ATS slug
     directly, since the Adzuna redirect_url path (discover_companies.py)
     turned out to almost never leave adzuna.* for real queries (see
     diagnose_adzuna_redirects.py's 2026-08-12 finding: 25/25 samples

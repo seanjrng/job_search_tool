@@ -7,7 +7,7 @@ SHELL := /bin/bash
 # instead of you having to remember the argparse flags.
 run:
 	@companies_flag=""; aggregators_flag=""; discovery_flag=""; company_flag=""; \
-	read -rp "Fetch from companies.yaml? [Y/n] " ans; \
+	read -rp "Fetch from ats_slug? [Y/n] " ans; \
 	[[ "$$ans" =~ ^[Nn] ]] && companies_flag="--skip-companies"; \
 	read -rp "Fetch from aggregators.yaml? [Y/n] " ans; \
 	[[ "$$ans" =~ ^[Nn] ]] && aggregators_flag="--skip-aggregators"; \

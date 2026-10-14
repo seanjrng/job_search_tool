@@ -1,81 +1,86 @@
-"""Auto-discovery: when aggregator_clients.fetch_full_description resolves
-an Adzuna redirect to a Greenhouse or Lever company not already tracked in
-companies.yaml, main.py queues it here after the run. Getting a company
-into companies.yaml means every future run fetches its FULL board directly
-(every open role, not just whatever Adzuna happened to surface this time)
-for free, without going through the aggregator/JD-fetch dance again.
+"""Record ATS boards found during a run in ats_slug.
 
-Trust note: a discovered (ats, slug) pair only ever gets here after a REAL
-successful single-job API call in fetch_full_description — strictly more
-trustworthy than a slug guessed from a search-result URL. companies.yaml
-already has scar tissue on that front (Coveo's "coveodeven" and Treewalk's
-display-page-ID slug both burned real API calls on 404s before being
-caught by hand) — this sidesteps that failure mode entirely.
+When aggregator_clients.fetch_full_description resolves an Adzuna redirect
+to a Greenhouse or Lever company that is not already in ats_slug, main.py
+queues it here after the run. A row in ats_slug is what later runs fetch
+directly.
 
-Deliberately does NOT rewrite companies.yaml with yaml.safe_dump: that
-would silently drop every hand-written comment in the file (the "ats:
-one of..." header, the Coveo/Treewalk provenance notes, the "Added from
-Edmonton/Calgary scan" section marker). Instead this only ever APPENDS a
-new commented block to the end of the file as plain text, leaving
-everything already there untouched.
+A discovered (ats, slug) pair only gets here after a real successful
+single-job API call. New rows are insert-only: an existing primary key is
+left unchanged.
 """
-import yaml
+import sqlite3
+import time
+from pathlib import Path
 
-COMPANIES_YAML = "companies.yaml"
-
-
-def load_known_keys(path: str = COMPANIES_YAML) -> set[tuple[str, str]]:
-    """(ats, slug) pairs already tracked, so we never suggest a duplicate."""
-    with open(path, encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
-    return {(c["ats"], c["slug"]) for c in data.get("companies", [])}
+DB_PATH = Path(__file__).resolve().parent.parent / "data" / "ats_discovery.sqlite3"
 
 
-def _yaml_str(value: str) -> str:
-    """Quote a value the way PyYAML would for a plain scalar, so a company
-    name with a colon or a leading special char (rare, but real — e.g.
-    "Warner Music Group: Canada") can't corrupt the file structure."""
-    return yaml.safe_dump(value, default_style='"').strip()
+def _connect(path: Path) -> sqlite3.Connection:
+    conn = sqlite3.connect(path)
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS ats_slug(
+            slug TEXT,
+            ats_board TEXT,
+            available INTEGER DEFAULT 1,
+            last_seen INTEGER,
+            discovery_time INTEGER,
+            name TEXT,
+            PRIMARY KEY(slug, ats_board)
+        )
+        """
+    )
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(ats_slug)")}
+    if "name" not in columns:
+        conn.execute("ALTER TABLE ats_slug ADD COLUMN name TEXT")
+    return conn
 
 
-def append_new_companies(discovered: list[dict], path: str = COMPANIES_YAML, source_note: str = "Adzuna aggregator + full-JD fetch") -> list[dict]:
-    """discovered: [{"name", "ats", "slug"}, ...] — may contain duplicates
-    (the same company posts multiple roles in one run) and may overlap
-    with what's already in companies.yaml. Dedups against both. Appends a
-    new commented block for whatever's left; returns exactly what got
-    appended (empty list if nothing new — the common case most runs).
+def load_known_keys(path: Path = DB_PATH) -> set[tuple[str, str]]:
+    """(ats, slug) pairs already stored, so a board is not recorded twice."""
+    conn = _connect(path)
+    try:
+        return {(ats, slug) for ats, slug in conn.execute("SELECT ats_board, slug FROM ats_slug")}
+    finally:
+        conn.close()
+
+
+def append_new_companies(discovered: list[dict], path: Path = DB_PATH) -> list[dict]:
+    """discovered: [{"name", "ats", "slug"}, ...].
+
+    Duplicates in this call and pairs already stored are skipped. Each new
+    board is inserted with available = 1 and both timestamps set to now.
+    Returns the dicts that were inserted.
     """
-    known = load_known_keys(path)
-    seen_this_call = set()
-    to_add = []
-    for c in discovered:
-        key = (c["ats"], c["slug"])
-        if key in known or key in seen_this_call:
-            continue
-        seen_this_call.add(key)
-        to_add.append(c)
-
-    if not to_add:
-        return []
-
-    lines = [f"\n  # Auto-discovered via {source_note}"]
-    for c in to_add:
-        lines.append(f"  - name: {_yaml_str(c['name'])}")
-        lines.append(f"    ats: {c['ats']}")
-        lines.append(f"    slug: {c['slug']}")
-    block = "\n".join(lines) + "\n"
-
-    with open(path, "a", encoding="utf-8") as f:
-        f.write(block)
-
-    return to_add
+    conn = _connect(path)
+    try:
+        known = {(ats, slug) for ats, slug in conn.execute("SELECT ats_board, slug FROM ats_slug")}
+        seen_this_call = set()
+        added = []
+        seen_at = int(time.time())
+        for company in discovered:
+            key = (company["ats"], company["slug"])
+            if key in known or key in seen_this_call:
+                continue
+            seen_this_call.add(key)
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO ats_slug
+                    (slug, ats_board, available, last_seen, discovery_time, name)
+                VALUES (?, ?, 1, ?, ?, ?)
+                """,
+                (company["slug"], company["ats"], seen_at, seen_at, company["name"]),
+            )
+            added.append(company)
+        conn.commit()
+    finally:
+        conn.close()
+    return added
 
 
 if __name__ == "__main__":
-    # Manual smoke check against the real file, no changes: just show what's
-    # currently tracked, since running this standalone with fake data would
-    # actually mutate companies.yaml — use test_discover_companies.py for that.
     known = load_known_keys()
-    print(f"{len(known)} (ats, slug) pairs currently tracked in {COMPANIES_YAML}:")
+    print(f"{len(known)} (ats, slug) pairs currently tracked in {DB_PATH}:")
     for ats, slug in sorted(known):
         print(f"  {ats:12s} {slug}")

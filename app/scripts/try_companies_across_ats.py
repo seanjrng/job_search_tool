@@ -1,5 +1,5 @@
 """For companies seen in your job data (data/seen_jobs.sqlite3) that
-aren't already tracked in companies.yaml, guess an ATS slug from the
+aren't already tracked in ats_slug, guess an ATS slug from the
 company name and try it directly against Greenhouse/Ashby/Workable/Lever/
 SmartRecruiters's public APIs — the same manual process already used for
 AltaML, LawDepot, MongoDB etc. during the Edmonton/Calgary scan, now
@@ -12,9 +12,9 @@ queries, 25/25 sampled redirect_urls stayed on adzuna.* and never reached
 an external ATS. That path isn't dead code, but it's not going to be the
 main way new companies get discovered either. Guessing slugs from company
 names you've already SEEN posting real roles (via any source — Adzuna,
-Remotive, or companies.yaml itself) is a more direct way to grow the list.
+Remotive, or ats_slug itself) is a more direct way to grow the list.
 
-IMPORTANT — this does NOT touch companies.yaml. A slug that returns a
+IMPORTANT — this does NOT write ats_slug. A slug that returns a
 successful API response with jobs isn't automatically the RIGHT board:
 Coveo's "coveodeven" was a real, live dev/test board with exactly 1 fake
 job, and Treewalk's first guessed slug 404'd even though a *different*
@@ -22,7 +22,7 @@ slug for the same company worked fine. Both were only caught by a human
 looking at the result. This script prints a report — company, ats, slug,
 job count, a few real sample titles — for you to eyeball. Once you've
 picked out the real ones, add them with discover_companies.py (see the
-snippet this script prints at the end) or by hand in companies.yaml.
+snippet this script prints at the end).
 
 Usage (run from the repo root):
     python -m app.scripts.try_companies_across_ats                # first 30 untracked companies seen
@@ -31,12 +31,14 @@ Usage (run from the repo root):
 """
 import argparse
 import re
+import sqlite3
 import sys
-
-import yaml
+from pathlib import Path
 
 from app import ats_clients
 from app import dedup
+
+ATS_DB = Path(__file__).resolve().parent.parent.parent / "data" / "ats_discovery.sqlite3"
 
 ATS_TYPES = ["greenhouse", "ashby", "workable", "lever", "smartrecruiters"]
 
@@ -49,10 +51,10 @@ _PUNCT_RE = re.compile(r"[^\w\s()-]")
 
 def candidate_slugs(name: str) -> list[str]:
     """Heuristic, not authoritative — every result still needs a human
-    look before it goes in companies.yaml. Splits on parentheses too:
+    look before it goes in ats_slug. Splits on parentheses too:
     "Fleetworthy (Bestpass)" needs "bestpass" as a candidate, not just
     "fleetworthy" or "fleetworthybestpass" — that's the REAL slug for
-    that company (already in companies.yaml), so this pattern is proven
+    that company (already tracked), so this pattern is proven
     to matter, not speculative."""
     parts = [p.strip() for p in re.split(r"[()]", name) if p.strip()]
     candidates = []
@@ -67,10 +69,20 @@ def candidate_slugs(name: str) -> list[str]:
     return candidates
 
 
-def load_known_names(path: str = "companies.yaml") -> set[str]:
-    with open(path, encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
-    return {c["name"].strip().lower() for c in data.get("companies", [])}
+def load_known_names(path: Path = ATS_DB) -> set[str]:
+    """Display names and slugs already stored, compared case-insensitively."""
+    conn = sqlite3.connect(path)
+    try:
+        rows = conn.execute("SELECT name, slug FROM ats_slug").fetchall()
+    finally:
+        conn.close()
+    known = set()
+    for name, slug in rows:
+        if name and name.strip():
+            known.add(name.strip().lower())
+        if slug and slug.strip():
+            known.add(slug.strip().lower())
+    return known
 
 
 def try_one(company_display_name: str, ats: str, slug: str):
@@ -109,7 +121,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--limit", type=int, default=30,
                          help="Max companies to try this run (default 30 — this is slow, up to 10 requests each)")
-    parser.add_argument("--company", help="Just try one company name, ignoring companies.yaml/seen-companies filtering")
+    parser.add_argument("--company", help="Just try one company name, ignoring ats_slug/seen-companies filtering")
     args = parser.parse_args()
 
     if args.company:
@@ -120,7 +132,7 @@ def main():
         known = load_known_names()
         todo = [c for c in seen if c.strip().lower() not in known]
         if not todo:
-            print("Nothing to try — every company in job_details is already in companies.yaml, "
+            print("Nothing to try — every company in job_details is already in ats_slug, "
                   "or job_details is empty (run main.py first).")
             return
         todo = todo[: args.limit]

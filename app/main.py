@@ -1,7 +1,7 @@
 """MVP orchestrator: fetch -> filter -> dedup -> write candidates.csv
 
 Pulls from two kinds of sources:
-  - companies.yaml   — one ATS board per known company (precise, no noise)
+  - ats_slug         — one ATS board per row with available = 1
   - aggregators.yaml — keyword+location search across many employers at
                         once (broader reach, more noise — filters.py earns
                         its keep here)
@@ -14,13 +14,14 @@ next increment once this looks right.
 Usage (run from the repo root):
     python -m app.main                       # everything: companies + aggregators
     python -m app.main --company affirm      # just one company, for debugging
-    python -m app.main --skip-aggregators    # companies.yaml only
+    python -m app.main --skip-aggregators    # ats_slug boards only
     python -m app.main --skip-companies      # aggregators.yaml only
 
 Or `make run` for an interactive prompt instead of remembering flags.
 """
 import argparse
 import csv
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -34,11 +35,36 @@ from app import discover_companies
 from app import filters
 load_dotenv()
 OUTPUT_CSV = Path("data/candidates.csv")
+ATS_DB = Path(__file__).resolve().parent.parent / "data" / "ats_discovery.sqlite3"
 
 
 def load_yaml_list(path: str, key: str) -> list[dict]:
     with open(path, encoding="utf-8") as f:
         return yaml.safe_load(f)[key]
+
+
+def load_ats_slugs(path: Path = ATS_DB) -> list[dict]:
+    """Boards to check, in the same shape as a companies.yaml entry.
+
+    Each dict has name, ats, and slug. name falls back to the slug when the
+    row has no display name.
+    """
+    conn = sqlite3.connect(path)
+    try:
+        rows = conn.execute(
+            """
+            SELECT name, ats_board, slug
+            FROM ats_slug
+            WHERE available = 1
+            ORDER BY ats_board, slug
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+    return [
+        {"name": name or slug, "ats": ats, "slug": slug}
+        for name, ats, slug in rows
+    ]
 
 
 def process_jobs(jobs: list[dict], conn) -> list[dict]:
@@ -115,17 +141,17 @@ if __name__ == "__main__":
     parser.add_argument("--skip-aggregators", action="store_true")
     parser.add_argument("--skip-companies", action="store_true")
     parser.add_argument("--skip-discovery", action="store_true",
-                         help="Don't auto-append newly-resolved Greenhouse/Lever companies to companies.yaml")
+                         help="Don't record newly-resolved Greenhouse/Lever companies in ats_slug")
     args = parser.parse_args()
 
-    companies = [] if args.skip_companies else load_yaml_list("companies.yaml", "companies")
+    companies = [] if args.skip_companies else load_ats_slugs()
     aggregators = [] if args.skip_aggregators else load_yaml_list("aggregators.yaml", "aggregators")
 
     if args.company:
         companies = [c for c in companies if c["slug"] == args.company]
         aggregators = []
         if not companies:
-            sys.exit(f"No company with slug '{args.company}' in companies.yaml")
+            sys.exit(f"No company with slug '{args.company}' in ats_slug")
 
     candidates = run(companies, aggregators)
     write_csv(candidates)
@@ -139,9 +165,9 @@ if __name__ == "__main__":
     if not args.skip_discovery:
         added = discover_companies.append_new_companies(aggregator_clients.DISCOVERED_COMPANIES)
         if not added:
-            print(f"No new companies were added to companies.yaml")
+            print("No new companies were added to ats_slug")
         if added:
             print(f"\nDiscovered {len(added)} new compan{'y' if len(added) == 1 else 'ies'} "
-                  f"via Adzuna — appended to companies.yaml:")
+                  f"via Adzuna — recorded in ats_slug:")
             for c in added:
                 print(f"  + {c['name']} ({c['ats']}: {c['slug']})")
