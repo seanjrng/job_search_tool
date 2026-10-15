@@ -13,12 +13,15 @@ from setup import ensure_ats_db
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def _load_expand():
-    path = ROOT / "ats-expansion" / "expand_companies.py"
-    spec = importlib.util.spec_from_file_location("expand_companies", path)
+def _load_module(path: Path, name: str):
+    spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def _load_expand():
+    return _load_module(ROOT / "ats-expansion" / "expand_companies.py", "expand_companies")
 
 
 def _table(path: Path) -> sqlite3.Connection:
@@ -138,6 +141,107 @@ def test_successful_check_sets_last_seen_and_leaves_available(tmp_path):
     ).fetchone()
     conn.close()
     assert row == (1, 123)
+
+
+def test_crawl_query_extracts_lever_and_workable_slugs(tmp_path):
+    import duckdb
+
+    discovery = _load_module(ROOT / "ats-expansion" / "ats_discovery.py", "ats_discovery")
+    parquet = tmp_path / "index.parquet"
+    con = duckdb.connect()
+    con.execute(
+        """
+        COPY (
+            SELECT * FROM (VALUES
+                ('jobs.lever.co', '/Netflix/11111111-1111-1111-1111-111111111111', '', 200),
+                ('jobs.eu.lever.co', '/EuCo/', '', 200),
+                ('api.lever.co', '/v0/postings/spotify', '', 200),
+                ('api.eu.lever.co', '/v0/postings/eucorp/abc', '', 200),
+                ('jobs.lever.co', '/favicon.ico', '', 200),
+                ('jobs.lever.co', '/logo.png', '', 200),
+                ('apply.workable.com', '/Treewalk/j/ABC123', '', 200),
+                ('apply.workable.com', '/api/v1/widget/accounts/seequent', '', 200),
+                ('apply.workable.com', '/j/SHORTCODE', '', 200),
+                ('treewalk.workable.com', '/backend', '', 200),
+                ('www.workable.com', '/pricing', '', 200),
+                ('jobs.workable.com', '/foo', '', 200),
+                ('example.com', '/Netflix', '', 200),
+                ('jobs.lever.co', '/hidden', '', 404)
+            ) t(url_host_name, url_path, url_query, fetch_status)
+        ) TO ?
+        """,
+        [str(parquet)],
+    )
+    rows = con.execute(discovery.QUERY, [str(parquet)]).fetchall()
+    con.close()
+    assert sorted(rows) == sorted(
+        [
+            ("lever", "netflix"),
+            ("lever", "euco"),
+            ("lever", "spotify"),
+            ("lever", "eucorp"),
+            ("workable", "treewalk"),
+            ("workable", "seequent"),
+        ]
+    )
+
+
+def test_load_slugs_includes_lever_and_workable(tmp_path):
+    expand = _load_expand()
+    conn = _table(tmp_path / "ats_discovery.sqlite3")
+    conn.executemany(
+        "INSERT INTO ats_slug (slug, ats_board, available) VALUES (?, ?, 1)",
+        [("acme", "lever"), ("treewalk", "workable"), ("nope", "greenhouse")],
+    )
+    conn.execute(
+        "UPDATE ats_slug SET available = 0 WHERE slug = 'nope'"
+    )
+    conn.commit()
+    assert expand.load_slugs(conn) == [("lever", "acme"), ("workable", "treewalk")]
+    conn.close()
+
+
+def test_lever_us_404_checks_eu_without_waiting():
+    expand = _load_expand()
+
+    class Response:
+        def __init__(self, code, payload=None):
+            self.status_code = code
+            self.headers = {}
+            self._payload = payload if payload is not None else {}
+
+        def json(self):
+            return self._payload
+
+    sleeps = []
+    session = MagicMock()
+    session.get.side_effect = [Response(404), Response(200, [])]
+    with patch.object(expand, "session", return_value=session), patch.object(expand.time, "sleep", sleeps.append):
+        name, reason = expand.check("lever", "euco")
+    assert (name, reason, sleeps) == ("euco", None, [])
+    assert session.get.call_args_list[0].args[0].startswith("https://api.lever.co/")
+    assert session.get.call_args_list[1].args[0].startswith("https://api.eu.lever.co/")
+
+
+def test_workable_check_requires_a_jobs_list():
+    expand = _load_expand()
+
+    class Response:
+        def __init__(self, payload):
+            self.status_code = 200
+            self.headers = {}
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+    session = MagicMock()
+    session.get.return_value = Response({"name": "Treewalk", "jobs": []})
+    with patch.object(expand, "session", return_value=session), patch.object(expand.time, "sleep", lambda _s: None):
+        assert expand.check("workable", "treewalk") == ("Treewalk", None)
+    session.get.return_value = Response({"ok": True})
+    with patch.object(expand, "session", return_value=session):
+        assert expand.check("workable", "treewalk") == (None, "unexpected-body")
 
 
 def test_url_check_waits_ten_seconds_before_each_retry():

@@ -1,4 +1,4 @@
-"""Discover Greenhouse and Ashby board slugs from a Common Crawl columnar index.
+"""Discover Greenhouse, Ashby, Lever, and Workable board slugs from a Common Crawl columnar index.
 
 One crawl id (default CC-MAIN-2026-30) is read from the first argument.
 Slugs already stored under the same (slug, ats_board) primary key are left
@@ -20,7 +20,7 @@ import duckdb
 
 ROOT = Path(__file__).resolve().parent
 DB_PATH = ROOT.parent / "data" / "ats_discovery.sqlite3"
-CRAWL = sys.argv[1] if len(sys.argv) > 1 else "CC-MAIN-2026-30"
+CRAWL = sys.argv[1] if len(sys.argv) > 1 else "CC-MAIN-2026-39"
 CACHE = ROOT / f".ats_discovery_cache_{CRAWL}"
 # Caches from greenhouse_query.py and ashby_tokens.py. A parquet file is
 # skipped when both exist, and they are deleted with the new cache.
@@ -37,13 +37,20 @@ QUERY = """
         SELECT url_host_name AS host, url_path AS path, url_query AS q
         FROM read_parquet(?)
         WHERE fetch_status = 200
-          AND url_host_name IN (
-              'boards.greenhouse.io',
-              'job-boards.greenhouse.io',
-              'boards.eu.greenhouse.io',
-              'job-boards.eu.greenhouse.io',
-              'jobs.ashbyhq.com',
-              'api.ashbyhq.com')
+          AND (
+              url_host_name IN (
+                  'boards.greenhouse.io',
+                  'job-boards.greenhouse.io',
+                  'boards.eu.greenhouse.io',
+                  'job-boards.eu.greenhouse.io',
+                  'jobs.ashbyhq.com',
+                  'api.ashbyhq.com',
+                  'jobs.lever.co',
+                  'jobs.eu.lever.co',
+                  'api.lever.co',
+                  'api.eu.lever.co',
+                  'apply.workable.com')
+              OR url_host_name LIKE '%.workable.com')
     )
     SELECT DISTINCT 'greenhouse' AS board, lower(slug) AS slug FROM (
         SELECT CASE
@@ -75,6 +82,43 @@ QUERY = """
                               'login', 'signup', 'health', 'privacy', 'terms',
                               'undefined', 'null', 'posting-api', 'job-board')
       AND NOT regexp_matches(lower(slug), '\\.(js|css|png|jpg|svg|ico|json|txt|xml|map|woff2?)$')
+    UNION ALL
+    SELECT DISTINCT 'lever' AS board, lower(slug) AS slug FROM (
+        SELECT CASE
+                 WHEN host IN ('api.lever.co', 'api.eu.lever.co')
+                   THEN regexp_extract(path, '^/v0/postings/([^/]+)', 1)
+                 ELSE regexp_extract(path, '^/([^/]+)', 1)
+               END AS slug
+        FROM hits
+        WHERE host IN ('jobs.lever.co', 'jobs.eu.lever.co',
+                       'api.lever.co', 'api.eu.lever.co')
+    )
+    WHERE slug <> ''
+      AND regexp_matches(slug, '^[A-Za-z0-9][A-Za-z0-9._~-]*$')
+      AND lower(slug) NOT IN ('v0', 'postings', 'embed', 'static', 'assets',
+                              'favicon.ico', 'robots.txt', 'sitemap.xml')
+      AND NOT regexp_matches(lower(slug), '\\.(js|css|png|jpg|svg|ico|json|txt|xml|map|woff2?)$')
+    UNION ALL
+    SELECT DISTINCT 'workable' AS board, lower(slug) AS slug FROM (
+        SELECT CASE
+                 WHEN host = 'apply.workable.com'
+                      AND path LIKE '/api/%/widget/accounts/%'
+                   THEN regexp_extract(path, '^/api/v[0-9]+/widget/accounts/([^/]+)', 1)
+                 WHEN host = 'apply.workable.com'
+                   THEN regexp_extract(path, '^/([^/]+)', 1)
+                 ELSE regexp_extract(host, '^([^.]+)\\.workable\\.com$', 1)
+               END AS slug
+        FROM hits
+        WHERE host = 'apply.workable.com' OR host LIKE '%.workable.com'
+    )
+    WHERE slug <> ''
+      AND regexp_matches(lower(slug), '^[a-z0-9][a-z0-9-]*$')
+      AND lower(slug) NOT IN ('www', 'apply', 'api', 'app', 'help', 'support',
+                              'status', 'blog', 'cdn', 'assets', 'static', 'mail',
+                              'email', 'login', 'jobs', 'careers', 'about', 'docs',
+                              'developer', 'developers', 'community', 'go', 'info',
+                              'news', 'j', 'backend', 'embed', 'signup', '_next',
+                              'favicon.ico', 'robots.txt', 'sitemap.xml')
 """
 
 
@@ -126,35 +170,36 @@ def collect_slugs(cache=None, legacy=None):
     """Return (slug, ats_board) pairs, one spelling per Ashby slug."""
     cache = CACHE if cache is None else cache
     legacy = LEGACY if legacy is None else legacy
-    greenhouse = set()
+    found = {board: set() for board in ("greenhouse", "lever", "workable")}
     ashby = {}
 
-    def add_ashby(slug):
-        ashby.setdefault(slug.lower(), slug)
+    def add_line(board, slug):
+        if board == "ashby":
+            ashby.setdefault(slug.lower(), slug)
+        elif board in found:
+            found[board].add(slug)
 
     if cache.is_dir():
         for path in sorted(cache.glob("*.txt")):
             for line in _lines(path):
                 board, slug = line.split("\t", 1)
-                if board == "greenhouse":
-                    greenhouse.add(slug)
-                elif board == "ashby":
-                    add_ashby(slug)
+                add_line(board, slug)
 
     greenhouse_dir = legacy["greenhouse"]
     if greenhouse_dir.is_dir():
         for path in greenhouse_dir.glob("*.txt"):
-            greenhouse.update(_lines(path))
+            found["greenhouse"].update(_lines(path))
 
     ashby_dir = legacy["ashby"]
     if ashby_dir.is_dir():
         for path in sorted(ashby_dir.glob("*.txt")):
             for slug in _lines(path):
-                add_ashby(slug)
+                add_line("ashby", slug)
 
-    return [(slug, "greenhouse") for slug in greenhouse] + [
-        (slug, "ashby") for slug in ashby.values()
-    ]
+    rows = [(slug, "ashby") for slug in ashby.values()]
+    for board, slugs in found.items():
+        rows.extend((slug, board) for slug in slugs)
+    return rows
 
 
 def store_slugs(rows, seen_at, db_path=None):

@@ -5,6 +5,8 @@ checked only against its own board:
 
     https://boards-api.greenhouse.io/v1/boards/{slug}
     https://api.ashbyhq.com/posting-api/job-board/{slug}
+    https://api.lever.co/v0/postings/{slug}?mode=json
+    https://apply.workable.com/api/v1/widget/accounts/{slug}?details=true
 
 On a 200, last_seen becomes the current epoch second and available stays 1.
 A failed check sets available to 0 and leaves last_seen unchanged. Transient
@@ -26,7 +28,10 @@ DB_PATH = ROOT.parent / "data" / "ats_discovery.sqlite3"
 ATS_URLS = {
     "greenhouse": "https://boards-api.greenhouse.io/v1/boards/{token}",
     "ashby": "https://api.ashbyhq.com/posting-api/job-board/{token}",
+    "lever": "https://api.lever.co/v0/postings/{token}?mode=json",
+    "workable": "https://apply.workable.com/api/v1/widget/accounts/{token}?details=true",
 }
+LEVER_EU = "https://api.eu.lever.co/v0/postings/{token}?mode=json"
 WORKERS = 8
 TIMEOUT = 20
 RETRIES = 4
@@ -37,14 +42,17 @@ _thread = threading.local()
 
 def load_slugs(db: sqlite3.Connection) -> list[tuple[str, str]]:
     """Return (ats, slug) rows that are still available to check."""
+    boards = tuple(ATS_URLS)
+    placeholders = ", ".join("?" * len(boards))
     return db.execute(
-        """
+        f"""
         SELECT ats_board, slug
         FROM ats_slug
         WHERE available = 1
-          AND ats_board IN ('greenhouse', 'ashby')
+          AND ats_board IN ({placeholders})
         ORDER BY ats_board, slug
-        """
+        """,
+        boards,
     ).fetchall()
 
 
@@ -82,45 +90,73 @@ def has_foreign(value: str) -> bool:
     return not value.isascii()
 
 
+def board_urls(ats: str, token: str) -> list[str]:
+    quoted = quote(token, safe="")
+    urls = [ATS_URLS[ats].format(token=quoted)]
+    # A US 404 is not final: the same site slug may live on the EU host.
+    if ats == "lever":
+        urls.append(LEVER_EU.format(token=quoted))
+    return urls
+
+
+def accept_board(ats: str, token: str, payload) -> tuple[str | None, str | None]:
+    """Return (name, None) when the body is a real board, else (None, reason)."""
+    name = token
+    if ats == "greenhouse":
+        if isinstance(payload, dict):
+            found = payload.get("name")
+            if isinstance(found, str) and found.strip():
+                name = found.strip()
+    elif ats == "ashby":
+        if not (isinstance(payload, dict) and isinstance(payload.get("jobs"), list)):
+            return None, "unexpected-body"
+    elif ats == "lever":
+        if not isinstance(payload, list):
+            return None, "unexpected-body"
+    elif ats == "workable":
+        if not (isinstance(payload, dict) and isinstance(payload.get("jobs"), list)):
+            return None, "unexpected-body"
+        found = payload.get("name") if isinstance(payload, dict) else None
+        if isinstance(found, str) and found.strip():
+            name = found.strip()
+    if has_foreign(name):
+        return None, "non-ascii"
+    return name, None
+
+
 def check(ats: str, token: str) -> tuple[str | None, str | None]:
-    """Return (company name, None) on 200, or (None, reason) otherwise."""
+    """Return (company name, None) on a live board, or (None, reason)."""
     if has_foreign(token):
         return None, "non-ascii"
-    url = ATS_URLS[ats].format(token=quote(token, safe=""))
     last_reason = "request failed"
-    for attempt in range(RETRIES):
-        try:
-            response = session().get(url, timeout=TIMEOUT)
-        except requests.RequestException as exc:
-            last_reason = type(exc).__name__
-            if attempt + 1 < RETRIES:
-                time.sleep(RETRY_WAIT)
-            continue
-        if response.status_code == 200:
+    for url_index, url in enumerate(board_urls(ats, token)):
+        for attempt in range(RETRIES):
             try:
-                payload = response.json()
-            except ValueError:
-                payload = None
-            name = token
-            if ats == "greenhouse":
-                if isinstance(payload, dict):
-                    found = payload.get("name")
-                    if isinstance(found, str) and found.strip():
-                        name = found.strip()
-            elif ats == "ashby":
-                # The posting API has no company name; guard against a
-                # "soft 200" that isn't a job board payload.
-                if not (isinstance(payload, dict) and isinstance(payload.get("jobs"), list)):
-                    return None, "unexpected-body"
-            if has_foreign(name):
-                return None, "non-ascii"
-            return name, None
-        if response.status_code in (429, 500, 502, 503, 504):
-            last_reason = str(response.status_code)
-            if attempt + 1 < RETRIES:
-                time.sleep(RETRY_WAIT)
-            continue
-        return None, str(response.status_code)
+                response = session().get(url, timeout=TIMEOUT)
+            except requests.RequestException as exc:
+                last_reason = type(exc).__name__
+                if attempt + 1 < RETRIES:
+                    time.sleep(RETRY_WAIT)
+                continue
+            if response.status_code == 200:
+                try:
+                    payload = response.json()
+                except ValueError:
+                    payload = None
+                return accept_board(ats, token, payload)
+            if response.status_code in (429, 500, 502, 503, 504):
+                last_reason = str(response.status_code)
+                if attempt + 1 < RETRIES:
+                    time.sleep(RETRY_WAIT)
+                continue
+            # Try the EU Lever host before recording a miss.
+            if response.status_code == 404 and url_index + 1 < len(board_urls(ats, token)):
+                break
+            return None, str(response.status_code)
+        else:
+            if url_index + 1 < len(board_urls(ats, token)):
+                continue
+            return None, last_reason
     return None, last_reason
 
 

@@ -106,9 +106,18 @@ def fetch_workable(company_display_name: str, slug: str) -> list[dict]:
 
 
 def fetch_lever(company_display_name: str, slug: str) -> list[dict]:
-    # Lever's public postings API.
-    url = f"https://api.lever.co/v0/postings/{slug}?mode=json"
-    resp = httpx.get(url, headers={"User-Agent": USER_AGENT}, timeout=TIMEOUT)
+    # Lever's public postings API. EU-hosted sites 404 on the global host.
+    headers = {"User-Agent": USER_AGENT}
+    urls = (
+        f"https://api.lever.co/v0/postings/{slug}?mode=json",
+        f"https://api.eu.lever.co/v0/postings/{slug}?mode=json",
+    )
+    resp = None
+    for url in urls:
+        resp = httpx.get(url, headers=headers, timeout=TIMEOUT)
+        if resp.status_code == 404:
+            continue
+        break
     resp.raise_for_status()
     data = resp.json()
     jobs = []
