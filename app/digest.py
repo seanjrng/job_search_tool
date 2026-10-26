@@ -1,7 +1,7 @@
 """Write a Markdown digest of the jobs shown on the review board.
 
-One section per job that passed filters and scored 55 or above, highest
-match score first. Jobs with no match score, or a match score below 55,
+One section per job that passed filters and scored 45 or above, highest
+match score first. Jobs with no match score, or a match score below 45,
 are left out. Jobs you have marked Applied or Skipped are left out too:
 Applied means you applied, Skipped means it is not a fit. Each remaining
 section carries the information the detail panel
@@ -50,8 +50,9 @@ MY_STATUS_LABEL = {
 # job from the digest. Interview, rejected, and silence stay, so a role
 # still in motion remains in the file. The review board still lists all of them.
 EXCLUDED_STATUSES = frozenset({"applied", "skipped"})
-# Same bar ai_evaluate uses when it prints a job as rejected.
-MIN_MATCH_SCORE = 55
+# Digest display line. The fit-validation sample and the scorer's console
+# line stay at 55.
+MIN_MATCH_SCORE = 45
 _STATUS_PLACEHOLDERS = frozenset({"", "—", "-", "— not set —", "- not set -", "not set"})
 _SKIPPED_MARKS = frozenset({"skipped", "skip", "pass", "not a fit", "not a good fit"})
 # Display labels we write for statuses that should stay in the digest.
@@ -423,7 +424,7 @@ def refresh_digest(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Write a Markdown digest of review-board jobs scored 55 or above. "
+        description="Write a Markdown digest of review-board jobs scored 45 or above. "
         "Applied and skipped jobs are left out."
     )
     parser.add_argument("--output", type=Path, default=OUTPUT_PATH, help="Markdown file to write")

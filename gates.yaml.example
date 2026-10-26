@@ -1,0 +1,20 @@
+# Pass/fail checks that run before the fit score. Copy to gates.yaml.
+# A failed gate is stored separately from match_score and names this gate.
+# python -m app.fit_validate gates
+# python -m app.ai_evaluate --gates
+
+gates: []
+
+# Example:
+# gates:
+#   - name: location
+#     location_allow:
+#       - "remote"
+#       - "Your City"
+#   - name: seniority
+#     title_deny:
+#       - "\\bintern\\b"
+#       - "\\bdirector\\b"
+#   - name: work_authorization
+#     description_deny:
+#       - "must be a u\\.?s\\.? citizen"

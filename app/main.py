@@ -47,17 +47,22 @@ def load_ats_slugs(path: Path = ATS_DB) -> list[dict]:
     """Boards to check, in the same shape as a companies.yaml entry.
 
     Each dict has name, ats, and slug. name falls back to the slug when the
-    row has no display name.
+    row has no display name. Only boards with a fetcher in
+    ats_clients.FETCHERS are returned.
     """
     conn = sqlite3.connect(path)
+    boards = tuple(ats_clients.FETCHERS)
+    placeholders = ", ".join("?" * len(boards))
     try:
         rows = conn.execute(
-            """
+            f"""
             SELECT name, ats_board, slug
             FROM ats_slug
             WHERE available = 1
+              AND ats_board IN ({placeholders})
             ORDER BY ats_board, slug
-            """
+            """,
+            boards,
         ).fetchall()
     finally:
         conn.close()

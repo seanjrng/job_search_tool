@@ -35,7 +35,7 @@ is sent to a third party beyond fetching the postings themselves.
    SQLite database directly, for browsing results and tracking your own
    `applied / interview / rejected / skipped / silence` status and notes.
 6. **Digest** (`app/digest.py`) — writes `data/digest.md`, one section per
-   job scored 55 or above that you have not marked applied or skipped,
+   job scored 45 or above that you have not marked applied or skipped,
    highest match score first, with the same information as the detail panel.
 
 ## Setup
@@ -118,6 +118,32 @@ Results are stored in SQLite (so re-running never re-pays for a job
 already scored) and written to `data/scored_candidates.csv`, sorted
 best-match-first.
 
+### Check the scores
+
+The check below compares those scores with your own five-point apply
+labels. While you label, it shows the title, location, and job description.
+It does not show the company name or the model score. Run it from the repo root:
+
+```bash
+python -m app.fit_validate          # draw a sample, then label each JD
+make validate                       # same thing
+
+python -m app.fit_validate report   # tuning-set agreement, noise, and sanity checks
+python -m app.fit_validate report --held-out
+python -m app.fit_validate tag      # one cause per disagreement
+python -m app.fit_validate noise    # rescore 12 JDs, 5 times each
+python -m app.fit_validate gates    # record hard-constraint pass/fail checks
+```
+
+Labels are `1` strong no, `2` or `n` no, `3` or `m` maybe, `4` or `y` yes,
+and `5` or `sy` strong yes. A note can follow the label. Yes and strong yes
+count as would apply. No and strong no count as would not. Maybe is the swing label.
+The default sample is 80 scored JDs plus 20 random controls,
+split in half. The report uses the tuning half unless you pass
+`--held-out`. Copy `gates.yaml.example` to `gates.yaml` to add location,
+seniority, or other pass/fail gates. `python -m app.ai_evaluate --gates`
+applies that file before spending a model call.
+
 ### 3. Review results
 
 ```bash
@@ -137,8 +163,8 @@ python -m app.digest          # writes data/digest.md
 make digest                   # same thing
 ```
 
-One section per job that passed filters and scored 55 or above, highest
-match score first. Jobs with no match score, or a score below 55, are
+One section per job that passed filters and scored 45 or above, highest
+match score first. Jobs with no match score, or a score below 45, are
 left out. So are jobs you have marked **Applied** (you applied) or
 **Skipped** (not a fit). Each remaining
 section has the same information as the review board's detail panel:
@@ -172,7 +198,8 @@ Thin wrappers over the commands above — run from the repo root:
 | `make run`      | `python -m app.main`             | Fetch + filter (step 1). Interactively asks whether to skip companies/aggregators/discovery and whether to limit to one company slug, instead of you remembering the flags. |
 | `make evaluate` | `python -m app.ai_evaluate`       | AI evaluation (step 2). Interactively asks for `--dry-run` and an optional `--limit`. |
 | `make web`      | `npm --prefix web run dev`       | Starts the Next.js review board, with `DB_PATH` already pointed at `data/seen_jobs.sqlite3`. |
-| `make digest`   | `python -m app.digest`           | Writes `data/digest.md` for jobs scored 55 or above that you have not marked applied or skipped, highest score first. Reads Applied/Skipped edits from an existing digest first. |
+| `make digest`   | `python -m app.digest`           | Writes `data/digest.md` for jobs scored 45 or above that you have not marked applied or skipped, highest score first. Reads Applied/Skipped edits from an existing digest first. |
+| `make validate` | `python -m app.fit_validate`     | Labels sampled job descriptions (title and JD only) and can report how well the fit scores match those labels. |
 | `make test`     | `pytest app/` + the standalone sanity-check scripts | Runs the full test suite (see the Tests section below). |
 
 `make` with no target runs `make run` (the default goal).
@@ -191,6 +218,9 @@ Thin wrappers over the commands above — run from the repo root:
 - **`profile.yaml`** — your experience profile fed to the AI evaluation
   step (see `profile.example.yaml` for the blank template and
   `profile.sample.yaml` for a fully worked example).
+- **`gates.yaml`** — optional pass/fail constraints (location, seniority,
+  work authorization) checked before the fit score. See
+  `gates.yaml.example`. Absent means gating is off.
 
 ## Project layout
 
@@ -203,7 +233,8 @@ app/
   dedup.py                 SQLite store (seen_jobs, job_details)
   discover_companies.py    records newly-resolved companies in ats_slug
   ai_evaluate.py           stage 2: Claude-based fit scoring
-  digest.py                Markdown digest of open jobs scored 55 or above, highest score first
+  fit_validate.py          label JDs and measure score noise, agreement, and gates
+  digest.py                Markdown digest of open jobs scored 45 or above, highest score first
   inspect_job.py           CLI to look up a stored job or list recent rejections
   refilter.py              re-runs current filters.py against already-fetched jobs
   scripts/                 one-off diagnostic/maintenance scripts, not part of the pipeline

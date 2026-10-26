@@ -124,13 +124,13 @@ def test_digest_orders_by_score_and_matches_panel_fields(tmp_path: Path):
     assert "Set **My status:** to `Applied` or `Skipped`" in render_digest([])
 
 
-def test_scores_below_55_are_left_out(tmp_path: Path):
+def test_scores_below_45_are_left_out(tmp_path: Path):
     db = str(tmp_path / "jobs.sqlite3")
     below = _job("https://example.com/below", "BelowCo", "Backend Engineer")
     edge = _job("https://example.com/edge", "EdgeCo", "Backend Engineer")
     applied_low = _job("https://example.com/applied-low", "AppliedLowCo", "Backend Engineer")
     with dedup.connect(db) as conn:
-        for job, score in ((below, 54), (edge, 55), (applied_low, 40)):
+        for job, score in ((below, 44), (edge, 45), (applied_low, 40)):
             dedup.save_details(conn, job, passed_filters=True)
             _eval(conn, job["url"], score)
         dedup.save_user_status(conn, applied_low["url"], "applied", "sent")
@@ -139,11 +139,10 @@ def test_scores_below_55_are_left_out(tmp_path: Path):
     assert write_digest(db, out) == 1
     text = out.read_text(encoding="utf-8")
     assert "EdgeCo" in text
-    assert "**Score:** 55" in text
+    assert "**Score:** 45" in text
     assert "BelowCo" not in text
     assert "AppliedLowCo" not in text
-    # A low score is not an applied/skipped mark, so it does not add to that count.
-    assert "excluded" not in text
+    assert "2 excluded jobs (applied or not a fit)." in text
 
 
 def _eval(conn, url, score, recommendation="consider"):

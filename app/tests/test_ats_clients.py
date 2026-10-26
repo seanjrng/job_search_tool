@@ -120,6 +120,135 @@ def test_description_fetch_failure_degrades_gracefully():
     print("fetch_smartrecruiters: detail-fetch failure -> empty description, no crash — OK")
 
 
+def _wd_list(postings, total=None):
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.raise_for_status = MagicMock()
+    body = {"jobPostings": postings}
+    if total is not None:
+        body["total"] = total
+    resp.json = MagicMock(return_value=body)
+    return resp
+
+
+def _wd_detail(description="Build things with Python.", start="2026-10-20", location="Calgary, AB, Canada"):
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.raise_for_status = MagicMock()
+    resp.json = MagicMock(return_value={
+        "jobPostingInfo": {
+            "jobDescription": description,
+            "startDate": start,
+            "location": location,
+            "postedOn": "Posted Today",
+        }
+    })
+    return resp
+
+
+def _wd_posting(path="/job/Calgary/Software-Engineer_JR1", title="Software Engineer", location="Calgary, AB, Canada"):
+    return {
+        "title": title,
+        "externalPath": path,
+        "locationsText": location,
+        "postedOn": "Posted Today",
+        "bulletFields": ["JR1"],
+    }
+
+
+def test_workday_parses_a_posting_and_fetches_its_description():
+    slug = "nvidia.wd5/NVIDIAExternalCareerSite"
+    with patch("httpx.post", return_value=_wd_list([_wd_posting()], total=1)) as mock_post, \
+         patch("httpx.get", return_value=_wd_detail()) as mock_get, \
+         patch("app.ats_clients.filters.title_is_relevant", return_value=True), \
+         patch("app.ats_clients.filters.location_is_allowed", return_value=True):
+        jobs = ats_clients.fetch_workday("NVIDIA", slug)
+    assert len(jobs) == 1
+    job = jobs[0]
+    assert job["company"] == "NVIDIA"
+    assert job["title"] == "Software Engineer"
+    assert job["location"] == "Calgary, AB, Canada"
+    assert job["posted_at"] == "2026-10-20"
+    assert job["url"] == (
+        "https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite"
+        "/job/Calgary/Software-Engineer_JR1"
+    )
+    assert "Python" in job["description"]
+    assert mock_post.call_args.args[0] == (
+        "https://nvidia.wd5.myworkdayjobs.com/wday/cxs/nvidia/NVIDIAExternalCareerSite/jobs"
+    )
+    assert mock_post.call_args.kwargs["json"] == {
+        "appliedFacets": {},
+        "limit": 20,
+        "offset": 0,
+        "searchText": "",
+    }
+    assert mock_get.call_args.args[0].endswith("/job/Software-Engineer_JR1")
+
+
+def test_workday_pages_until_offset_reaches_total():
+    page = [_wd_posting(path=f"/job/X/Role_JR{i}", title="Marketing Manager", location="Warsaw") for i in range(20)]
+    short = [_wd_posting(path="/job/X/Role_JR20", title="Marketing Manager", location="Warsaw")]
+    with patch("httpx.post", side_effect=[_wd_list(page, total=21), _wd_list(short, total=21)]) as mock_post, \
+         patch("httpx.get") as mock_get:
+        jobs = ats_clients.fetch_workday("NVIDIA", "nvidia.wd5/NVIDIAExternalCareerSite")
+    assert len(jobs) == 21
+    assert mock_get.call_count == 0
+    assert mock_post.call_count == 2
+    assert mock_post.call_args_list[1].kwargs["json"]["offset"] == 20
+
+
+def test_workday_description_is_gated_and_a_detail_failure_is_empty():
+    promising = _wd_posting()
+    other = _wd_posting(path="/job/Warsaw/Role_JR2", title="Software Engineer", location="Warsaw, Poland")
+    def relevant(title):
+        return title == "Software Engineer"
+
+    def allowed(location):
+        return "Calgary" in location
+
+    with patch("httpx.post", return_value=_wd_list([promising, other], total=2)), \
+         patch("httpx.get", side_effect=Exception("timeout")) as mock_get, \
+         patch("app.ats_clients.filters.title_is_relevant", side_effect=relevant), \
+         patch("app.ats_clients.filters.location_is_allowed", side_effect=allowed):
+        jobs = ats_clients.fetch_workday("NVIDIA", "nvidia.wd5/NVIDIAExternalCareerSite")
+    assert mock_get.call_count == 1
+    assert mock_get.call_args.args[0].endswith("/job/Software-Engineer_JR1")
+    assert len(jobs) == 2
+    by_url = {job["url"]: job for job in jobs}
+    promising_url = (
+        "https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite/job/Calgary/Software-Engineer_JR1"
+    )
+    assert by_url[promising_url]["description"] == ""
+    assert by_url[promising_url]["posted_at"] == "Posted Today"
+    other_url = "https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite/job/Warsaw/Role_JR2"
+    assert by_url[other_url]["description"] == ""
+
+
+def test_workday_404_uses_myworkdaysite_for_the_list():
+    first = MagicMock()
+    first.status_code = 404
+    first.raise_for_status = MagicMock()
+    with patch("httpx.post", side_effect=[first, _wd_list([], total=0)]) as mock_post:
+        jobs = ats_clients.fetch_workday("Clio", "clio.wd3/Clio_Careers")
+    assert jobs == []
+    assert mock_post.call_args_list[0].args[0].startswith("https://clio.wd3.myworkdayjobs.com/")
+    assert mock_post.call_args_list[1].args[0] == (
+        "https://wd3.myworkdaysite.com/wday/cxs/clio/Clio_Careers/jobs"
+    )
+
+
+def test_workday_is_wired_into_fetch_company():
+    assert ats_clients.FETCHERS["workday"] is ats_clients.fetch_workday
+    with patch("httpx.post", return_value=_wd_list([], total=0)):
+        jobs = ats_clients.fetch_company({
+            "name": "NVIDIA",
+            "ats": "workday",
+            "slug": "nvidia.wd5/NVIDIAExternalCareerSite",
+        })
+    assert jobs == []
+
+
 def test_wired_into_fetchers_and_fetch_company():
     assert ats_clients.FETCHERS["smartrecruiters"] is ats_clients.fetch_smartrecruiters
     with patch("httpx.get", side_effect=[_list_resp([]), ]):

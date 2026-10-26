@@ -21,6 +21,7 @@ Usage:
     python app/ai_evaluate.py              # evaluate everything unscored
     python app/ai_evaluate.py --limit 20   # cap this run (e.g. to control cost)
     python app/ai_evaluate.py --dry-run    # show what WOULD be sent, call nothing
+    python app/ai_evaluate.py --gates      # record gates.yaml failures and do not score them
 """
 import argparse
 import csv
@@ -190,6 +191,21 @@ def evaluate_one(client, profile: dict, job: dict, max_retries: int = 1) -> dict
                             f"{missing} after {max_retries + 1} attempt(s): {evaluation}")
 
 
+def failing_constraint(job: dict, gates) -> str | None:
+    """Name of the hard constraint that rejects this JD, before any fit score.
+
+    `gates` is None when gating is off, and a compiled gate list otherwise.
+    A passing JD returns None so the caller still asks for a fit score.
+    """
+    if not gates:
+        return None
+    from app.fit_validate import evaluate_gates
+    outcome = evaluate_gates(job, gates)
+    if outcome["passed"]:
+        return None
+    return outcome["failing_constraint"]
+
+
 def write_csv(conn, path: Path = OUTPUT_CSV) -> int:
     path.parent.mkdir(parents=True, exist_ok=True)
     rows = list(dedup.iter_scored_candidates(conn))
@@ -208,6 +224,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--limit", type=int, default=None, help="Max number of jobs to evaluate this run")
     parser.add_argument("--dry-run", action="store_true", help="Show what would be evaluated, call no API")
+    parser.add_argument(
+        "--gates", action="store_true",
+        help="Apply gates.yaml pass/fail checks before scoring. Gated-out jobs are recorded and not sent to the model.",
+    )
     args = parser.parse_args()
 
     profile = load_profile()
@@ -221,8 +241,22 @@ if __name__ == "__main__":
         if not queue:
             sys.exit(0)
 
+        gate_cfg = None
+        gate_ver = None
+        if args.gates:
+            from app.fit_validate import ensure_schema, gate_version, load_gates, record_gate
+            gate_cfg = load_gates()
+            if gate_cfg is None:
+                sys.exit("gates.yaml not found. Copy gates.yaml.example to gates.yaml, or drop --gates.")
+            ensure_schema(conn)
+            gate_ver = gate_version(gate_cfg)
+
         if args.dry_run:
             for job in queue:
+                constraint = failing_constraint(job, gate_cfg)
+                if constraint:
+                    print(f"WOULD GATE | {constraint} | {job['title']}")
+                    continue
                 print(f"WOULD EVALUATE | {job['company']:20s} | {job['title']}")
             sys.exit(0)
 
@@ -237,6 +271,12 @@ if __name__ == "__main__":
         client = anthropic.Anthropic(api_key=api_key)
 
         for i, job in enumerate(queue, 1):
+            if gate_cfg is not None:
+                outcome = record_gate(conn, job, gate_cfg, gate_ver)
+                conn.commit()
+                if not outcome["passed"]:
+                    print(f"Gated out | {outcome['failing_constraint']} | {job['title']}")
+                    continue
             try:
                 evaluation = evaluate_one(client, profile, job)
             except Exception as e:

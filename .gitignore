@@ -14,7 +14,9 @@ profile.yaml
 aggregators.yaml
 companies.yaml
 filters.yaml
+gates.yaml
 *_slug_cache*/*
 *_slug_cache/
 *_slug_cache*
 part-*
+ai-context.md

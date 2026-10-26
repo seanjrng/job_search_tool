@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 .DEFAULT_GOAL := run
 
-.PHONY: run test evaluate web digest setup
+.PHONY: run test evaluate web digest setup validate
 
 # Copy missing example configs, install Python dependencies, and create
 # data/ats_discovery.sqlite3 when it is not already there.
@@ -48,3 +48,7 @@ web:
 # digest are saved first.
 digest:
 	python -m app.digest
+
+# Label sampled job descriptions and check the fit scores against those labels.
+validate:
+	python -m app.fit_validate

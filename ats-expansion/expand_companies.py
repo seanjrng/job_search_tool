@@ -7,12 +7,17 @@ checked only against its own board:
     https://api.ashbyhq.com/posting-api/job-board/{slug}
     https://api.lever.co/v0/postings/{slug}?mode=json
     https://apply.workable.com/api/v1/widget/accounts/{slug}?details=true
+    POST https://{tenant}.{wdN}.myworkdayjobs.com/wday/cxs/{tenant}/{site}/jobs
+
+Workday slugs look like "{tenant}.{wdN}/{site}". A 404 on the myworkdayjobs
+host is retried once on wd{N}.myworkdaysite.com.
 
 On a 200, last_seen becomes the current epoch second and available stays 1.
 A failed check sets available to 0 and leaves last_seen unchanged. Transient
 request failures wait 10 seconds before each retry.
 """
 
+import re
 import sqlite3
 import sys
 import threading
@@ -32,6 +37,17 @@ ATS_URLS = {
     "workable": "https://apply.workable.com/api/v1/widget/accounts/{token}?details=true",
 }
 LEVER_EU = "https://api.eu.lever.co/v0/postings/{token}?mode=json"
+# Same body the career site posts. limit 20 is the public page size.
+WORKDAY_SEARCH = {
+    "appliedFacets": {},
+    "limit": 20,
+    "offset": 0,
+    "searchText": "",
+}
+WORKDAY_SLUG = re.compile(
+    r"^(?P<tenant>[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)"
+    r"\.(?P<wd>wd[0-9]+)/(?P<site>[A-Za-z0-9][A-Za-z0-9._-]*)$"
+)
 WORKERS = 8
 TIMEOUT = 20
 RETRIES = 4
@@ -42,7 +58,7 @@ _thread = threading.local()
 
 def load_slugs(db: sqlite3.Connection) -> list[tuple[str, str]]:
     """Return (ats, slug) rows that are still available to check."""
-    boards = tuple(ATS_URLS)
+    boards = (*ATS_URLS, "workday")
     placeholders = ", ".join("?" * len(boards))
     return db.execute(
         f"""
@@ -90,13 +106,37 @@ def has_foreign(value: str) -> bool:
     return not value.isascii()
 
 
+def workday_jobs_urls(token: str) -> list[str]:
+    """List-endpoint URLs for a "{tenant}.{wdN}/{site}" slug."""
+    match = WORKDAY_SLUG.fullmatch(token)
+    if match is None:
+        return []
+    tenant = quote(match.group("tenant"), safe="")
+    site = quote(match.group("site"), safe="")
+    wd = match.group("wd")
+    path = f"/wday/cxs/{tenant}/{site}/jobs"
+    return [
+        f"https://{tenant}.{wd}.myworkdayjobs.com{path}",
+        f"https://{wd}.myworkdaysite.com{path}",
+    ]
+
+
 def board_urls(ats: str, token: str) -> list[str]:
+    if ats == "workday":
+        return workday_jobs_urls(token)
     quoted = quote(token, safe="")
     urls = [ATS_URLS[ats].format(token=quoted)]
     # A US 404 is not final: the same site slug may live on the EU host.
     if ats == "lever":
         urls.append(LEVER_EU.format(token=quoted))
     return urls
+
+
+def fetch_board(ats: str, url: str):
+    client = session()
+    if ats == "workday":
+        return client.post(url, json=WORKDAY_SEARCH, timeout=TIMEOUT)
+    return client.get(url, timeout=TIMEOUT)
 
 
 def accept_board(ats: str, token: str, payload) -> tuple[str | None, str | None]:
@@ -119,6 +159,10 @@ def accept_board(ats: str, token: str, payload) -> tuple[str | None, str | None]
         found = payload.get("name") if isinstance(payload, dict) else None
         if isinstance(found, str) and found.strip():
             name = found.strip()
+    elif ats == "workday":
+        if not (isinstance(payload, dict) and isinstance(payload.get("jobPostings"), list)):
+            return None, "unexpected-body"
+        name = token.split(".", 1)[0]
     if has_foreign(name):
         return None, "non-ascii"
     return name, None
@@ -128,11 +172,14 @@ def check(ats: str, token: str) -> tuple[str | None, str | None]:
     """Return (company name, None) on a live board, or (None, reason)."""
     if has_foreign(token):
         return None, "non-ascii"
+    urls = board_urls(ats, token)
+    if not urls:
+        return None, "bad-slug"
     last_reason = "request failed"
-    for url_index, url in enumerate(board_urls(ats, token)):
+    for url_index, url in enumerate(urls):
         for attempt in range(RETRIES):
             try:
-                response = session().get(url, timeout=TIMEOUT)
+                response = fetch_board(ats, url)
             except requests.RequestException as exc:
                 last_reason = type(exc).__name__
                 if attempt + 1 < RETRIES:
@@ -149,12 +196,12 @@ def check(ats: str, token: str) -> tuple[str | None, str | None]:
                 if attempt + 1 < RETRIES:
                     time.sleep(RETRY_WAIT)
                 continue
-            # Try the EU Lever host before recording a miss.
-            if response.status_code == 404 and url_index + 1 < len(board_urls(ats, token)):
+            # Lever's EU host and Workday's myworkdaysite host are the same board.
+            if response.status_code == 404 and url_index + 1 < len(urls):
                 break
             return None, str(response.status_code)
         else:
-            if url_index + 1 < len(board_urls(ats, token)):
+            if url_index + 1 < len(urls):
                 continue
             return None, last_reason
     return None, last_reason

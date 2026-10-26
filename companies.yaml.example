@@ -2,8 +2,19 @@
 # Boards to check live in data/ats_discovery.sqlite3, table ats_slug
 # (slug, ats_board, available, last_seen, discovery_time, name).
 #
-# ats: one of "greenhouse" | "ashby" | "workable" | "lever" | "smartrecruiters"
+# ats: one of "greenhouse" | "ashby" | "workable" | "lever" | "smartrecruiters" | "workday"
 # slug: the identifier used in that ATS's public API URL
+#
+# Workday rows live in ats_slug with ats_board "workday". The slug is
+# "{tenant}.{wdN}/{site}", the three pieces of the career site
+# https://{tenant}.{wdN}.myworkdayjobs.com/{site}
+# (locale such as /en-US/ may sit in front of {site}). The same triple is
+# posted to /wday/cxs/{tenant}/{site}/jobs. A myworkdaysite.com URL
+# https://{wdN}.myworkdaysite.com/recruiting/{tenant}/{site} is the same board.
+#
+#   - name: NVIDIA
+#     ats: workday
+#     slug: nvidia.wd5/NVIDIAExternalCareerSite
 #
 # The list below is the original author's real target list (Alberta/Canada
 # tech companies), kept as a working example of the entry shape.

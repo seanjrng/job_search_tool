@@ -55,6 +55,7 @@ def test_load_ats_slugs_matches_company_dict_shape(tmp_path):
             ("stripe", "greenhouse", 1, "Stripe"),
             ("0g", "ashby", 1, None),
             ("gone", "lever", 0, "Gone Co"),
+            ("nvidia.wd5/NVIDIAExternalCareerSite", "workday", 1, "NVIDIA"),
         ],
     )
     conn.commit()
@@ -64,6 +65,11 @@ def test_load_ats_slugs_matches_company_dict_shape(tmp_path):
     assert loaded == [
         {"name": "0g", "ats": "ashby", "slug": "0g"},
         {"name": "Stripe", "ats": "greenhouse", "slug": "stripe"},
+        {
+            "name": "NVIDIA",
+            "ats": "workday",
+            "slug": "nvidia.wd5/NVIDIAExternalCareerSite",
+        },
     ]
     assert all(set(company) == {"name", "ats", "slug"} for company in loaded)
 
@@ -186,18 +192,95 @@ def test_crawl_query_extracts_lever_and_workable_slugs(tmp_path):
     )
 
 
+def test_crawl_query_extracts_workday_sites(tmp_path):
+    import duckdb
+
+    discovery = _load_module(ROOT / "ats-expansion" / "ats_discovery.py", "ats_discovery_workday")
+    parquet = tmp_path / "index.parquet"
+    con = duckdb.connect()
+    con.execute(
+        """
+        COPY (
+            SELECT * FROM (VALUES
+                ('nvidia.wd5.myworkdayjobs.com', '/en-US/NVIDIAExternalCareerSite/job/Santa-Clara/Title_JR1', '', 200),
+                ('nvidia.wd5.myworkdayjobs.com', '/wday/cxs/nvidia/NVIDIAExternalCareerSite/jobs', '', 200),
+                ('adobe.wd5.myworkdayjobs.com', '/external_experienced', '', 200),
+                ('general-motors.wd12.myworkdayjobs.com', '/GM_Careers', '', 200),
+                ('wd1.myworkdaysite.com', '/recruiting/salesforce/External_Career_Site', '', 200),
+                ('wd3.myworkdaysite.com', '/en-US/recruiting/clio/Clio_Careers/job/x', '', 200),
+                ('wd5.myworkdaysite.com', '/wday/cxs/nike/NikeCareers/jobs', '', 200),
+                ('custom.example', '/wday/cxs/acme/External/jobs', '', 200),
+                ('nvidia.wd5.myworkdayjobs.com', '/wday/cxs/otherco/External/jobs', '', 200),
+                ('nvidia.wd5.myworkdayjobs.com', '/en-US', '', 200),
+                ('nvidia.wd5.myworkdayjobs.com', '/en-US/job/Title_JR1', '', 200),
+                ('nvidia.wd5.myworkdayjobs.com', '/robots.txt', '', 200),
+                ('nvidia.wd5.myworkdayjobs.com', '/logo.png', '', 200),
+                ('www.wd5.myworkdayjobs.com', '/External', '', 200),
+                ('jobs.lever.co', '/Netflix/11111111-1111-1111-1111-111111111111', '', 200),
+                ('nvidia.wd5.myworkdayjobs.com', '/Hidden', '', 404)
+            ) t(url_host_name, url_path, url_query, fetch_status)
+        ) TO ?
+        """,
+        [str(parquet)],
+    )
+    rows = con.execute(discovery.QUERY, [str(parquet)]).fetchall()
+    con.close()
+    assert sorted(rows) == sorted(
+        [
+            ("lever", "netflix"),
+            ("workday", "nvidia.wd5/NVIDIAExternalCareerSite"),
+            ("workday", "adobe.wd5/external_experienced"),
+            ("workday", "general-motors.wd12/GM_Careers"),
+            ("workday", "salesforce.wd1/External_Career_Site"),
+            ("workday", "clio.wd3/Clio_Careers"),
+            ("workday", "nike.wd5/NikeCareers"),
+        ]
+    )
+
+
+def test_workday_site_spelling_is_kept_once(tmp_path):
+    discovery = _load_module(ROOT / "ats-expansion" / "ats_discovery.py", "ats_discovery_case")
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    (cache / "a.txt").write_text(
+        "workday\tnvidia.wd5/NVIDIAExternalCareerSite\nworkday\tadobe.wd5/external_experienced\n",
+        encoding="utf-8",
+    )
+    (cache / "b.txt").write_text(
+        "workday\tnvidia.wd5/nvidiaexternalcareersite\n",
+        encoding="utf-8",
+    )
+    missing = tmp_path / "missing"
+    rows = discovery.collect_slugs(cache=cache, legacy={"greenhouse": missing, "ashby": missing})
+    assert sorted(rows) == sorted(
+        [
+            ("nvidia.wd5/NVIDIAExternalCareerSite", "workday"),
+            ("adobe.wd5/external_experienced", "workday"),
+        ]
+    )
+
+
 def test_load_slugs_includes_lever_and_workable(tmp_path):
     expand = _load_expand()
     conn = _table(tmp_path / "ats_discovery.sqlite3")
     conn.executemany(
         "INSERT INTO ats_slug (slug, ats_board, available) VALUES (?, ?, 1)",
-        [("acme", "lever"), ("treewalk", "workable"), ("nope", "greenhouse")],
+        [
+            ("acme", "lever"),
+            ("treewalk", "workable"),
+            ("nope", "greenhouse"),
+            ("nvidia.wd5/NVIDIAExternalCareerSite", "workday"),
+        ],
     )
     conn.execute(
         "UPDATE ats_slug SET available = 0 WHERE slug = 'nope'"
     )
     conn.commit()
-    assert expand.load_slugs(conn) == [("lever", "acme"), ("workable", "treewalk")]
+    assert expand.load_slugs(conn) == [
+        ("lever", "acme"),
+        ("workable", "treewalk"),
+        ("workday", "nvidia.wd5/NVIDIAExternalCareerSite"),
+    ]
     conn.close()
 
 
@@ -221,6 +304,61 @@ def test_lever_us_404_checks_eu_without_waiting():
     assert (name, reason, sleeps) == ("euco", None, [])
     assert session.get.call_args_list[0].args[0].startswith("https://api.lever.co/")
     assert session.get.call_args_list[1].args[0].startswith("https://api.eu.lever.co/")
+
+
+def test_workday_check_posts_the_jobs_endpoint():
+    expand = _load_expand()
+
+    class Response:
+        def __init__(self, code, payload=None):
+            self.status_code = code
+            self.headers = {}
+            self._payload = payload if payload is not None else {}
+
+        def json(self):
+            return self._payload
+
+    slug = "nvidia.wd5/NVIDIAExternalCareerSite"
+    session = MagicMock()
+    session.post.return_value = Response(200, {"total": 2, "jobPostings": [{"title": "Engineer"}]})
+    with patch.object(expand, "session", return_value=session), patch.object(expand.time, "sleep", lambda _s: None):
+        assert expand.check("workday", slug) == ("nvidia", None)
+    posted = session.post.call_args
+    assert posted.args[0] == (
+        "https://nvidia.wd5.myworkdayjobs.com/wday/cxs/nvidia/NVIDIAExternalCareerSite/jobs"
+    )
+    assert posted.kwargs["json"] == expand.WORKDAY_SEARCH
+    session.post.return_value = Response(200, {"ok": True})
+    with patch.object(expand, "session", return_value=session):
+        assert expand.check("workday", slug) == (None, "unexpected-body")
+    assert expand.check("workday", "not-a-workday-slug") == (None, "bad-slug")
+
+
+def test_workday_404_tries_myworkdaysite_without_waiting():
+    expand = _load_expand()
+
+    class Response:
+        def __init__(self, code, payload=None):
+            self.status_code = code
+            self.headers = {}
+            self._payload = payload if payload is not None else {}
+
+        def json(self):
+            return self._payload
+
+    sleeps = []
+    session = MagicMock()
+    session.post.side_effect = [
+        Response(404, {"message": "not found"}),
+        Response(200, {"total": 0, "jobPostings": []}),
+    ]
+    with patch.object(expand, "session", return_value=session), patch.object(expand.time, "sleep", sleeps.append):
+        assert expand.check("workday", "clio.wd3/Clio_Careers") == ("clio", None)
+    assert sleeps == []
+    assert session.post.call_args_list[0].args[0].startswith("https://clio.wd3.myworkdayjobs.com/")
+    assert session.post.call_args_list[1].args[0] == (
+        "https://wd3.myworkdaysite.com/wday/cxs/clio/Clio_Careers/jobs"
+    )
 
 
 def test_workable_check_requires_a_jobs_list():

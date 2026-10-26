@@ -31,6 +31,9 @@ the others were. Verify it the same way Coveo/Treewalk's slugs got
 verified: `python -m app.main --company <slug>` against a real
 SmartRecruiters company before trusting it in a real run.
 """
+import re
+from urllib.parse import quote
+
 import httpx
 
 from app import filters
@@ -223,12 +226,164 @@ def fetch_smartrecruiters(company_display_name: str, slug: str) -> list[dict]:
     return jobs
 
 
+# "{tenant}.{wdN}/{site}" — the slug ats_discovery stores for a career site.
+_WORKDAY_SLUG = re.compile(
+    r"^(?P<tenant>[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)"
+    r"\.(?P<wd>wd[0-9]+)/(?P<site>[A-Za-z0-9][A-Za-z0-9._-]*)$"
+)
+WORKDAY_PAGE = 20
+# The public search stops returning new jobs around this offset.
+WORKDAY_MAX = 2000
+
+
+def _workday_list(origin: str, tenant: str, site: str, offset: int):
+    url = f"{origin}/wday/cxs/{quote(tenant, safe='')}/{quote(site, safe='')}/jobs"
+    return httpx.post(
+        url,
+        json={
+            "appliedFacets": {},
+            "limit": WORKDAY_PAGE,
+            "offset": offset,
+            "searchText": "",
+        },
+        headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
+        timeout=TIMEOUT,
+    )
+
+
+def _workday_detail(origin: str, tenant: str, site: str, external_path: str) -> dict:
+    """Best-effort job detail. A failure leaves description empty."""
+    job_slug = external_path.rstrip("/").rsplit("/", 1)[-1]
+    if not job_slug:
+        return {}
+    url = (
+        f"{origin}/wday/cxs/{quote(tenant, safe='')}/{quote(site, safe='')}"
+        f"/job/{quote(job_slug, safe='')}"
+    )
+    try:
+        resp = httpx.get(
+            url,
+            headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
+            timeout=TIMEOUT,
+        )
+        resp.raise_for_status()
+        info = resp.json().get("jobPostingInfo") or {}
+        return info if isinstance(info, dict) else {}
+    except Exception:
+        return {}
+
+
+def _workday_location(posting: dict, info: dict) -> str:
+    parts = []
+    loc = info.get("location") if info else None
+    if isinstance(loc, str) and loc.strip():
+        parts.append(loc.strip())
+    extra = info.get("additionalLocations") if info else None
+    if isinstance(extra, str):
+        extra = [extra]
+    if isinstance(extra, list):
+        for item in extra:
+            text = item if isinstance(item, str) else ""
+            if isinstance(item, dict):
+                found = item.get("location") or item.get("descriptor") or ""
+                text = found if isinstance(found, str) else ""
+            if text.strip():
+                parts.append(text.strip())
+    if parts:
+        unique = []
+        for part in parts:
+            if part not in unique:
+                unique.append(part)
+        return "; ".join(unique)
+    text = posting.get("locationsText") or ""
+    return text if isinstance(text, str) else ""
+
+
+def fetch_workday(company_display_name: str, slug: str) -> list[dict]:
+    """Public Workday CXS board.
+
+    slug is "{tenant}.{wdN}/{site}". The list endpoint is POST, paged by
+    offset. Descriptions and the real start date come from a second GET
+    per job, and only for postings that already pass the title and
+    location filters. A 404 on myworkdayjobs.com is tried once on
+    myworkdaysite.com.
+    """
+    match = _WORKDAY_SLUG.fullmatch(slug)
+    if match is None:
+        raise ValueError(f"Not a Workday slug: {slug}")
+    tenant, wd, site = match.group("tenant"), match.group("wd"), match.group("site")
+    origins = (
+        f"https://{tenant}.{wd}.myworkdayjobs.com",
+        f"https://{wd}.myworkdaysite.com",
+    )
+    response = None
+    origin = None
+    data = None
+    for candidate in origins:
+        response = _workday_list(candidate, tenant, site, 0)
+        if response.status_code == 404:
+            continue
+        response.raise_for_status()
+        origin = candidate
+        data = response.json()
+        break
+    else:
+        response.raise_for_status()
+
+    jobs = []
+    offset = 0
+    while isinstance(data, dict):
+        postings = data.get("jobPostings") or []
+        if not isinstance(postings, list) or not postings:
+            break
+        total = data.get("total")
+        for posting in postings:
+            if not isinstance(posting, dict):
+                continue
+            external_path = posting.get("externalPath") or ""
+            if not isinstance(external_path, str) or not external_path.startswith("/"):
+                continue
+            title = posting.get("title") or ""
+            if not isinstance(title, str):
+                title = ""
+            location = posting.get("locationsText") or ""
+            if not isinstance(location, str):
+                location = ""
+            info = {}
+            if filters.title_is_relevant(title) and filters.location_is_allowed(location):
+                info = _workday_detail(origin, tenant, site, external_path)
+            posted = posting.get("postedOn")
+            if info:
+                posted = info.get("startDate") or info.get("postedOn") or posted
+                location = _workday_location(posting, info)
+            jobs.append({
+                "company": company_display_name,
+                "title": title,
+                "location": location,
+                "url": f"https://{tenant}.{wd}.myworkdayjobs.com/{site}{external_path}",
+                "posted_at": posted,
+                "description": (info.get("jobDescription") or "") if info else "",
+            })
+        offset += WORKDAY_PAGE
+        if len(postings) < WORKDAY_PAGE:
+            break
+        if isinstance(total, int) and offset >= total:
+            break
+        if offset >= WORKDAY_MAX:
+            break
+        response = _workday_list(origin, tenant, site, offset)
+        response.raise_for_status()
+        data = response.json()
+    return jobs
+
+
 FETCHERS = {
     "greenhouse": fetch_greenhouse,
     "ashby": fetch_ashby,
     "workable": fetch_workable,
     "lever": fetch_lever,
     "smartrecruiters": fetch_smartrecruiters,
+    "workday": fetch_workday,
 }
 
 

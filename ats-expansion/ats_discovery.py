@@ -1,9 +1,14 @@
-"""Discover Greenhouse, Ashby, Lever, and Workable board slugs from a Common Crawl columnar index.
+"""Discover Greenhouse, Ashby, Lever, Workable, and Workday boards from a Common Crawl columnar index.
 
-One crawl id (default CC-MAIN-2026-30) is read from the first argument.
+One crawl id (default CC-MAIN-2026-39) is read from the first argument.
 Slugs already stored under the same (slug, ats_board) primary key are left
 as they are. Per-file caches, including caches written by the earlier
 greenhouse and ashby scripts, are removed after a successful run.
+
+A Workday slug is "{tenant}.{wdN}/{site}" from a career-site URL
+https://{tenant}.{wdN}.myworkdayjobs.com/{site} or
+https://{wdN}.myworkdaysite.com/recruiting/{tenant}/{site}. The same triple
+is read from /wday/cxs/{tenant}/{site}/ when the host identifies wdN.
 """
 
 import gzip
@@ -50,7 +55,10 @@ QUERY = """
                   'api.lever.co',
                   'api.eu.lever.co',
                   'apply.workable.com')
-              OR url_host_name LIKE '%.workable.com')
+              OR url_host_name LIKE '%.workable.com'
+              OR url_host_name LIKE '%.myworkdayjobs.com'
+              OR url_host_name LIKE '%.myworkdaysite.com'
+              OR url_path LIKE '%/wday/cxs/%')
     )
     SELECT DISTINCT 'greenhouse' AS board, lower(slug) AS slug FROM (
         SELECT CASE
@@ -119,6 +127,56 @@ QUERY = """
                               'developer', 'developers', 'community', 'go', 'info',
                               'news', 'j', 'backend', 'embed', 'signup', '_next',
                               'favicon.ico', 'robots.txt', 'sitemap.xml')
+    UNION ALL
+    SELECT DISTINCT 'workday' AS board, tenant || '.' || wd || '/' || site AS slug
+    FROM (
+        SELECT
+            CASE
+                WHEN cxs_tenant <> '' THEN lower(cxs_tenant)
+                WHEN recruiting_tenant <> '' THEN lower(recruiting_tenant)
+                ELSE host_tenant
+            END AS tenant,
+            wd,
+            CASE
+                WHEN cxs_site <> '' THEN cxs_site
+                WHEN recruiting_site <> '' THEN recruiting_site
+                WHEN locale_site <> '' THEN locale_site
+                ELSE first_segment
+            END AS site
+        FROM (
+            SELECT
+                COALESCE(regexp_extract(lower(host), '^([^.]+)\\.wd[0-9]+\\.myworkdayjobs\\.com$', 1), '') AS host_tenant,
+                COALESCE(
+                    NULLIF(regexp_extract(lower(host), '\\.(wd[0-9]+)\\.myworkdayjobs\\.com$', 1), ''),
+                    NULLIF(regexp_extract(lower(host), '^(wd[0-9]+)\\.myworkdaysite\\.com$', 1), ''),
+                    ''
+                ) AS wd,
+                COALESCE(regexp_extract(path, '^/(?:[A-Za-z]{2}-[A-Za-z0-9]{2,8}/)?wday/cxs/([^/]+)/([^/]+)', 1), '') AS cxs_tenant,
+                COALESCE(regexp_extract(path, '^/(?:[A-Za-z]{2}-[A-Za-z0-9]{2,8}/)?wday/cxs/([^/]+)/([^/]+)', 2), '') AS cxs_site,
+                COALESCE(regexp_extract(path, '^/(?:[A-Za-z]{2}-[A-Za-z0-9]{2,8}/)?recruiting/([^/]+)/([^/]+)', 1), '') AS recruiting_tenant,
+                COALESCE(regexp_extract(path, '^/(?:[A-Za-z]{2}-[A-Za-z0-9]{2,8}/)?recruiting/([^/]+)/([^/]+)', 2), '') AS recruiting_site,
+                COALESCE(regexp_extract(path, '^/[A-Za-z]{2}-[A-Za-z0-9]{2,8}/([^/]+)', 1), '') AS locale_site,
+                COALESCE(regexp_extract(path, '^/([^/]+)', 1), '') AS first_segment
+            FROM hits
+            WHERE host LIKE '%.myworkdayjobs.com'
+               OR host LIKE '%.myworkdaysite.com'
+               OR path LIKE '%/wday/cxs/%'
+        )
+        WHERE wd <> ''
+          AND (cxs_tenant = '' OR host_tenant = '' OR lower(cxs_tenant) = host_tenant)
+          AND (recruiting_tenant = '' OR host_tenant = '' OR lower(recruiting_tenant) = host_tenant)
+    )
+    WHERE tenant <> ''
+      AND site <> ''
+      AND regexp_matches(tenant, '^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$')
+      AND tenant NOT IN ('www', 'api', 'cdn', 'static', 'assets', 'mail')
+      AND regexp_matches(wd, '^wd[0-9]+$')
+      AND regexp_matches(site, '^[A-Za-z0-9][A-Za-z0-9._-]*$')
+      AND lower(site) NOT IN ('wday', 'job', 'jobs', 'recruiting', 'login',
+                              'signin', 'search', 'robots.txt', 'favicon.ico',
+                              'sitemap.xml', 'assets', 'static', 'privacy')
+      AND NOT regexp_matches(lower(site), '^[a-z]{2}-[a-z0-9]{2,8}$')
+      AND NOT regexp_matches(lower(site), '\\.(js|css|png|jpg|jpeg|svg|ico|json|txt|xml|map|woff2?|gif|webp)$')
 """
 
 
@@ -167,15 +225,19 @@ def _lines(path):
 
 
 def collect_slugs(cache=None, legacy=None):
-    """Return (slug, ats_board) pairs, one spelling per Ashby slug."""
+    """Return (slug, ats_board) pairs.
+
+    Ashby slugs and Workday sites keep the first spelling. The rest are
+    already lowercase from the crawl query.
+    """
     cache = CACHE if cache is None else cache
     legacy = LEGACY if legacy is None else legacy
     found = {board: set() for board in ("greenhouse", "lever", "workable")}
-    ashby = {}
+    cased = {"ashby": {}, "workday": {}}
 
     def add_line(board, slug):
-        if board == "ashby":
-            ashby.setdefault(slug.lower(), slug)
+        if board in cased:
+            cased[board].setdefault(slug.lower(), slug)
         elif board in found:
             found[board].add(slug)
 
@@ -196,7 +258,7 @@ def collect_slugs(cache=None, legacy=None):
             for slug in _lines(path):
                 add_line("ashby", slug)
 
-    rows = [(slug, "ashby") for slug in ashby.values()]
+    rows = [(slug, board) for board, spells in cased.items() for slug in spells.values()]
     for board, slugs in found.items():
         rows.extend((slug, board) for slug in slugs)
     return rows
